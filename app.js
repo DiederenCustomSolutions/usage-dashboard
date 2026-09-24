@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.6";
+const APP_VERSION = "0.27.7";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -3601,6 +3601,17 @@ let retryTimeoutId = null;
    De "slechtste" (laagste %) is leidend voor de hoofdring — zo zie je
    meteen waar het knelt.
    -------------------------------------------------------------------------- */
+// Most recent measurement time across all profiles and providers.
+function newestProfileSync(profiles) {
+    let newest = 0;
+    for (const profile of Object.values(profiles || {})) {
+        for (const status of Object.values((profile && profile.syncStatus) || {})) {
+            if (status && status.lastSynced > newest) newest = status.lastSynced;
+        }
+    }
+    return newest;
+}
+
 function aggregateProfileSyncStatus(profiles) {
     let bestClaude = null;   // laagste pctRemaining (meest kritiek)
     let bestChatgpt = null;  // laagste pctRemaining5h
@@ -3616,7 +3627,10 @@ function aggregateProfileSyncStatus(profiles) {
         // Claude
         if (profile.syncStatus && profile.syncStatus.claude) {
             const c = profile.syncStatus.claude;
-            if (!bestClaude || (c.pctRemaining !== undefined && c.pctRemaining < (bestClaude.pctRemaining || 100))) {
+            const cPct = c.pctRemaining !== undefined ? c.pctRemaining : 100;
+            const bPct = bestClaude && bestClaude.pctRemaining !== undefined ? bestClaude.pctRemaining : 100;
+            // Tie (e.g. the same account measured on two PCs): keep the newest measurement (v0.27.7).
+            if (!bestClaude || cPct < bPct || (cPct === bPct && (c.lastSynced || 0) > (bestClaude.lastSynced || 0))) {
                 bestClaude = { ...c };
             }
         }
@@ -3625,7 +3639,7 @@ function aggregateProfileSyncStatus(profiles) {
             const g = profile.syncStatus.chatgpt;
             const gPct = g.pctRemaining5h !== undefined ? g.pctRemaining5h : 100;
             const curPct = bestChatgpt && bestChatgpt.pctRemaining5h !== undefined ? bestChatgpt.pctRemaining5h : 100;
-            if (!bestChatgpt || gPct < curPct) {
+            if (!bestChatgpt || gPct < curPct || (gPct === curPct && (g.lastSynced || 0) > (bestChatgpt.lastSynced || 0))) {
                 bestChatgpt = { ...g };
             }
         }
@@ -3634,7 +3648,7 @@ function aggregateProfileSyncStatus(profiles) {
             const z = profile.syncStatus.zai;
             const zPct = z.pctRemaining5h !== undefined ? z.pctRemaining5h : 100;
             const curPct = bestZai && bestZai.pctRemaining5h !== undefined ? bestZai.pctRemaining5h : 100;
-            if (!bestZai || zPct < curPct) {
+            if (!bestZai || zPct < curPct || (zPct === curPct && (z.lastSynced || 0) > (bestZai.lastSynced || 0))) {
                 bestZai = { ...z };
             }
         }
@@ -4752,7 +4766,8 @@ function requestRemoteRefresh() {
     // vertrouwen op de refreshRequested-vlag (immuun voor caching/read-after-write).
     const baseline = {
         claude:  state.syncStatus?.claude?.lastSynced  || 0,
-        chatgpt: state.syncStatus?.chatgpt?.lastSynced || 0
+        chatgpt: state.syncStatus?.chatgpt?.lastSynced || 0,
+        newest:  newestProfileSync(state.cloudProfiles)
     };
 
     const proceed = () => {
@@ -4880,7 +4895,10 @@ function startFastPollingForRemoteSync(baseline) {
         const cloudClaude  = aggregated.claude?.lastSynced  || 0;
         const cloudChatgpt = aggregated.chatgpt?.lastSynced || 0;
         const flagCleared  = !doc.refreshRequested;
-        const freshScrape  = cloudClaude > baselineClaude || cloudChatgpt > baselineChatgpt;
+        // Any PC with a newer measurement counts (v0.27.7): with two PCs on the same account the
+        // card may show the other PC's figure, which made the phone wait for the slow path.
+        const freshScrape  = cloudClaude > baselineClaude || cloudChatgpt > baselineChatgpt
+            || newestProfileSync(doc.profiles) > ((baseline && baseline.newest) || 0);
 
         // Update status op basis van claim-veld zodat de gebruiker "PC seen it" ziet.
         if (doc.refreshClaimedBy && doc.refreshRequested) {

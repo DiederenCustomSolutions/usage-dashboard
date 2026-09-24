@@ -4,6 +4,24 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.7] — 2026-09-24
+
+### Telefoon wacht niet meer op de oude meting van een andere pc
+
+Rob testte 0.27.6 op zijn telefoon: nog steeds ~20 seconden, terwijl de nieuwe cijfers na
+3 seconden in de database stonden. Oorzaak in de telefoon-app: met hetzelfde account op
+twee pc's (beide 100%) toonde de kaart bij een gelijke stand de meting van de éérste pc —
+de oude. De telefoon vergeleek daarmee en dacht dat er nog niets nieuws was.
+
+- Bij een gelijke stand toont de kaart nu de **nieuwste** meting (Claude, ChatGPT, Z.ai).
+  Een lager percentage wint nog steeds, zoals voorheen. Terloops opgelost: een Claude-stand
+  van precies 0% telde als 100% bij het vergelijken.
+- "Klaar" = **welke pc dan ook** heeft een nieuwere meting dan vóór de druk op de knop.
+- Nagerekend met de echte stand van 24-9 (pc 186s oud, agents-pc 3s oud): kaart toont nu
+  de meting van 3s geleden.
+
+---
+
 ## [0.27.6] — 2026-09-24 (proefversie, alleen op de agents-pc)
 
 ### Verversen vanaf de telefoon: binnen seconden, en elke pc ververst
