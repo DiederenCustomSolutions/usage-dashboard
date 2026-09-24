@@ -4,6 +4,21 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.9] — 2026-09-24
+
+### Analyze-tabblad liet de browser vastlopen
+
+Rob klikte op Analyze en de browser hing. De logtabel bouwde élke regel los op; op Robs pc
+staan er ~5.800 (vooral "Synced status correction").
+
+- De tabel toont de nieuwste 200 regels, met een regel eronder hoeveel er in totaal zijn.
+  Zoeken doorzoekt nog steeds alles.
+- De rijen worden in één keer neergezet in plaats van regel voor regel.
+
+**Gemeten (preview, 6.000 nagemaakte regels):** tabel opbouwen 25 ms, zoeken 11 ms.
+
+---
+
 ## [0.27.8] — 2026-09-24
 
 ### Verversknop op de pc laat nu ook de andere pc's meten

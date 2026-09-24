@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.8";
+const APP_VERSION = "0.27.9";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -2120,6 +2120,8 @@ function providerUsageText(log) {
     return log.model === "claude" ? `${formatNumber(log.tokens)} tokens` : "1 message";
 }
 
+const LOG_TABLE_MAX_ROWS = 200;
+
 function renderLogsList() {
     const now = Date.now();
     const feedList = document.getElementById("log-feed-list");
@@ -2173,10 +2175,11 @@ function renderLogsList() {
         tableEmpty.style.display = "block";
     } else {
         tableEmpty.style.display = "none";
-        filteredLogs.forEach(l => {
-            const tr = document.createElement("tr");
+        // Thousands of rows froze the browser; show the newest ones, search still covers everything.
+        const shownLogs = filteredLogs.slice(0, LOG_TABLE_MAX_ROWS);
+        let rows = shownLogs.map(l => {
             const noteText = l.note || (l.model === "claude" ? "Automatic token logging" : "Automatic prompt logging");
-            tr.innerHTML = `
+            return `<tr>
                 <td><input type="checkbox" class="log-checkbox" data-id="${l.id}"></td>
                 <td class="font-mono">${new Date(l.timestamp).toLocaleString("en-GB")}</td>
                 <td><span class="badge badge-${l.model}">${providerDisplayName(l.model)}</span></td>
@@ -2187,9 +2190,14 @@ function renderLogsList() {
                         <i class="fa-solid fa-trash-can"></i>
                     </button>
                 </td>
-            `;
-            tableBody.appendChild(tr);
-        });
+            </tr>`;
+        }).join("");
+        if (filteredLogs.length > shownLogs.length) {
+            rows += `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">
+                Showing the newest ${shownLogs.length} of ${filteredLogs.length} entries — use search to find older ones.
+            </td></tr>`;
+        }
+        tableBody.innerHTML = rows;
     }
 }
 
