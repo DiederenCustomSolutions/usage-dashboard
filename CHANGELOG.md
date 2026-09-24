@@ -4,6 +4,31 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.6] — 2026-09-24 (proefversie, alleen op de agents-pc)
+
+### Verversen vanaf de telefoon: binnen seconden, en elke pc ververst
+
+Een druk op verversen op de telefoon kwam pas na 15-60 seconden aan: de extensie keek
+maar eens per 30 seconden (`chrome.alarms`) of er een verzoek lag, en negeerde een
+verzoek nog eens 30 seconden als er kort daarvoor gemeten was. Daarnaast ververste per
+verzoek maar één pc: de eerste die klaar was wiste de vlag, de andere sloegen hem over.
+
+- **Live luisteren:** een offscreen-document (`offscreen.html`/`offscreen.js`, nieuwe
+  permissie `offscreen`) houdt een live stroom op de `meta`-node open en wekt de service
+  worker bij elke wijziging. De 30s-poll blijft als vangnet.
+- **Elke pc beantwoordt elk verzoek één keer:** een verzoek wordt herkend aan
+  `refreshRequestedAt`; die blijft staan als de eerste pc de vlag wist. Elke pc onthoudt
+  welk verzoek hij al beantwoord heeft (`lt_last_handled_refresh_at`). De claim-skip is weg.
+- **Alleen meten wat het profiel gebruikt:** geen verborgen ChatGPT/Z.ai-tabbladen meer
+  voor diensten waar dit profiel nooit cijfers voor leverde (kostte 16-20s en een foutmelding).
+- Het logboek meldt nu na hoeveel seconden het verzoek binnenkwam.
+
+**Gemeten (24-9, nagebootste telefoondruk):** agents-pc met deze versie had nieuwe
+Claude-cijfers na **3 seconden**. Een pc op 0.27.5 reageerde niet binnen 2 minuten,
+omdat de nieuwe versie het verzoek al had afgehandeld — die moet dus ook bijgewerkt worden.
+
+---
+
 ## [0.27.5] — 2026-09-02
 
 ### Repo verhuisd naar de organisatie — oude PWA-adres gaf 404

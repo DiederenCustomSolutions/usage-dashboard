@@ -31,13 +31,39 @@ chrome.runtime.onInstalled.addListener(() => {
         }
     });
     ensureRemoteRefreshAlarm();
+    ensureMetaWatcher();
     checkActiveTabForInvite();
 });
 
 // Ook bij browser-start opnieuw zetten (service workers worden gesuspend)
 chrome.runtime.onStartup.addListener(() => {
     ensureRemoteRefreshAlarm();
+    ensureMetaWatcher();
 });
+
+/* LIVE REFRESH (v0.28.0): an offscreen document keeps a live stream on the meta node open,
+   so a refresh request from the phone arrives within a second instead of on the next
+   30s alarm tick. The alarm poll below remains as a fallback. */
+function ensureMetaWatcher() {
+    if (!chrome.offscreen) return;
+    chrome.storage.local.get(["lt_sync_config"], async (res) => {
+        const config = res.lt_sync_config;
+        if (!config || !config.enabled || !config.binId || !config.pairingKey || !cs2IsFirebase(config)) return;
+        try {
+            const has = chrome.offscreen.hasDocument ? await chrome.offscreen.hasDocument() : false;
+            if (!has) {
+                await chrome.offscreen.createDocument({
+                    url: "offscreen.html",
+                    reasons: ["WORKERS"],
+                    justification: "Keep a live connection to the sync database so refresh requests from the phone arrive instantly."
+                });
+            }
+            chrome.runtime.sendMessage({ type: "META_WATCH", url: cs2Url(config.binId, "meta") }).catch(() => {});
+        } catch (e) {
+            logSync(`[Live Refresh] Listener could not start: ${e.message || e}`);
+        }
+    });
+}
 
 function ensureRemoteRefreshAlarm() {
     if (!chrome.alarms) return;
@@ -53,6 +79,7 @@ function ensureRemoteRefreshAlarm() {
 if (chrome.alarms && chrome.alarms.onAlarm) {
     chrome.alarms.onAlarm.addListener((alarm) => {
         if (alarm.name === "remoteRefreshPoll") {
+            ensureMetaWatcher();
             checkForRemoteRefreshRequestBG();
         }
     });
@@ -67,7 +94,10 @@ if (chrome.tabs && chrome.tabs.onUpdated) {
 
 // Listen for messages from content scripts (scrapers) or the dashboard UI
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === "SYNC_FROM_TAB") {
+    if (message.type === "META_CHANGED") {
+        checkForRemoteRefreshRequestBG();
+        return false;
+    } else if (message.type === "SYNC_FROM_TAB") {
         const { provider, data } = message;
         handleTabSync(provider, data)
             .then(() => sendResponse({ status: "success" }))
@@ -741,7 +771,7 @@ function logSync(message) {
 // SW-restarts overleeft — voorkomt dubbele scrape-triggers.
 // =================================================================
 function checkForRemoteRefreshRequestBG() {
-    chrome.storage.local.get(["lt_sync_config", "lt_last_bg_scrape", "lt_profile_id", "lt_profile_label"], (res) => {
+    chrome.storage.local.get(["lt_sync_config", "lt_last_bg_scrape", "lt_last_handled_refresh_at", "lt_profile_id", "lt_profile_label", "lt_users", "lt_current_user"], (res) => {
         const config = res.lt_sync_config;
         if (!config || !config.enabled || !config.binId || !config.pairingKey) return;
 
@@ -751,9 +781,11 @@ function checkForRemoteRefreshRequestBG() {
         // Heartbeat: schrijf lastSeen naar de bin elke ~5 minuten (onafhankelijk van scrape-throttle).
         maybeWriteHeartbeat(config, profileId, profileLabel);
 
-        // Throttle: max 1 scrape-trigger per 30s (overleeft SW-restarts)
+        // Short guard against double triggers (survives SW restarts). Which request was
+        // already answered is tracked per request below, so no long throttle is needed.
         const lastTrigger = res.lt_last_bg_scrape || 0;
-        if (Date.now() - lastTrigger < 30000) return;
+        if (Date.now() - lastTrigger < 5000) return;
+        const lastHandled = res.lt_last_handled_refresh_at || 0;
 
         // Lees de refresh-vlaggen: V2 uit de meta-node, legacy uit de root-blob.
         const readFlags = cs2IsFirebase(config)
@@ -765,25 +797,19 @@ function checkForRemoteRefreshRequestBG() {
               });
 
         readFlags.then(flags => {
-            if (!flags || flags.refreshRequested !== true) return;
-
-            const reqTime = flags.refreshRequestedAt || 0;
-            // Negeer requests ouder dan 2 minuten (oude lussen)
+            // A request is identified by its timestamp. The first profile to finish clears
+            // refreshRequested but keeps refreshRequestedAt, so every other profile still
+            // answers the same request once (v0.28.0: previously only one PC refreshed).
+            const reqTime = (flags && flags.refreshRequestedAt) || 0;
+            if (!reqTime || reqTime <= lastHandled) return;
+            // Ignore requests older than 2 minutes (old loops)
             if (Date.now() - reqTime >= 120000) {
-                resetRemoteRefreshRequestFlagBG(config);
+                if (flags.refreshRequested === true) resetRemoteRefreshRequestFlagBG(config);
                 return;
             }
 
-            // Skip als een ander profiel dit verzoek al recent geclaimd heeft (< 45s geleden).
-            const claimedBy = flags.refreshClaimedBy;
-            const claimedAt = flags.refreshClaimedAt || 0;
-            if (claimedBy && claimedBy !== profileId && Date.now() - claimedAt < 45000) {
-                logSync(`[Cloud Remote BG] Verzoek al geclaimd door ${claimedBy} — skip.`);
-                return;
-            }
-
-            // Sla trigger-tijd op in storage (overleeft SW-suspend/restart)
-            chrome.storage.local.set({ lt_last_bg_scrape: Date.now() });
+            // Remember trigger time and the answered request (survives SW suspend/restart)
+            chrome.storage.local.set({ lt_last_bg_scrape: Date.now(), lt_last_handled_refresh_at: reqTime });
 
             // Claim het verzoek (V2: meta ETag-RMW maakt de claim atomair; legacy: root-blob).
             if (cs2IsFirebase(config)) {
@@ -796,10 +822,13 @@ function checkForRemoteRefreshRequestBG() {
                 syncRelay(config).write(config.binId, { data: claimEnc }).catch(() => {});
             }
 
-            logSync("[Cloud Remote BG] Telefoon vroeg om refresh — scrapers worden op achtergrond gestart.");
-            triggerScrapeFromBackground("claude", config, profileId, profileLabel);
-            setTimeout(() => triggerScrapeFromBackground("chatgpt", config, profileId, profileLabel), 1500);
-            setTimeout(() => triggerScrapeFromBackground("zai", config, profileId, profileLabel), 3000);
+            // Only measure providers this profile has ever delivered data for; opening hidden
+            // tabs for services this profile is not logged in to cost 16-20s and an error.
+            const user = (res.lt_users || {})[res.lt_current_user] || {};
+            const known = Object.keys(user.syncStatus || {}).filter(p => ["claude", "chatgpt", "zai"].includes(p));
+            const providers = known.length ? known : ["claude", "chatgpt", "zai"];
+            logSync(`[Cloud Remote BG] Phone requested a refresh ${Math.round((Date.now() - reqTime) / 1000)}s ago — measuring: ${providers.join(", ")}.`);
+            providers.forEach((p, i) => setTimeout(() => triggerScrapeFromBackground(p, config, profileId, profileLabel), i * 1500));
         })
         .catch(() => { /* stil */ });
     });
@@ -1131,7 +1160,8 @@ function pushUserDataToCloud(user) {
                     }),
                     // Scrape = vervulling van een eventueel refresh-verzoek → vlag wissen.
                     cs2UpdateEnc(config, "meta", (m) => {
-                        m.schema = CS2_SCHEMA; m.refreshRequested = false; m.refreshRequestedAt = null; return m;
+                        // refreshRequestedAt stays: other profiles use it to answer the same request.
+                        m.schema = CS2_SCHEMA; m.refreshRequested = false; return m;
                     })
                 ];
                 if (CS2_WRITE_LEGACY) {

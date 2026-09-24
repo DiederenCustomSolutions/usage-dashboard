@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.5";
+const APP_VERSION = "0.27.6";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5064,7 +5064,7 @@ function pushUserDataToCloud() {
                     logs: cs2PruneLogs(state.userLogs || []), threads: state.userThreads || []
                 }),
                 cs2UpdateEnc(config, "meta", (m) => {
-                    m.schema = CS2_SCHEMA; m.refreshRequested = false; m.refreshRequestedAt = null; return m;
+                    m.schema = CS2_SCHEMA; m.refreshRequested = false; return m;  // keep refreshRequestedAt (v0.28.0)
                 })
             ];
             if (CS2_WRITE_LEGACY) {
