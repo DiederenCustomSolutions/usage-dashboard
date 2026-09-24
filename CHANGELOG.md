@@ -4,6 +4,21 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.8] — 2026-09-24
+
+### Verversknop op de pc laat nu ook de andere pc's meten
+
+Rob drukte op zijn pc op verversen en zag niets veranderen. Zijn pc mat wel (logboek 14:42
+en 14:49, upload ok), maar het overzicht toonde alleen de kaarten van de agents-pc, en die
+kreeg nooit een verzoek: op een pc ververste de knop alleen de eigen pc. Alleen de telefoon
+vroeg alle pc's om te meten (dat werkte wel, gemeten 24-9).
+
+- De verversknop op een pc meet nog steeds meteen zichzelf, en zet daarnaast hetzelfde
+  verzoek in de database als de telefoon, zodat elke andere pc ook meet.
+- De vragende pc markeert het verzoek als al beantwoord, zodat hij niet twee keer meet.
+
+---
+
 ## [0.27.7] — 2026-09-24
 
 ### Telefoon wacht niet meer op de oude meting van een andere pc

@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.7";
+const APP_VERSION = "0.27.8";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -2767,6 +2767,7 @@ function setupEventListeners() {
             } else {
                 triggerSyncNow("claude");
                 setTimeout(() => triggerSyncNow("chatgpt"), 1000); // Stagger to prevent browser throttling
+                requestRefreshFromOtherPcs();
             }
         });
     }
@@ -4814,6 +4815,21 @@ function requestRemoteRefresh() {
     })
     .then(proceed)
     .catch(failed);
+}
+
+// Refresh button on a PC: the overview also shows the cards of other PCs, so ask them to
+// measure as well. This PC just measured itself, so it marks the request as already handled.
+function requestRefreshFromOtherPcs() {
+    DB.get(["lt_sync_config"], (res) => {
+        const config = res.lt_sync_config;
+        if (!config || !config.enabled || !config.binId || !config.pairingKey || !cs2IsFirebase(config)) return;
+        const reqTime = Date.now();
+        DB.set({ lt_last_handled_refresh_at: reqTime });
+        cs2UpdateEnc(config, "meta", (m) => {
+            m.schema = CS2_SCHEMA; m.refreshRequested = true; m.refreshRequestedAt = reqTime;
+            m.refreshClaimedBy = null; m.refreshClaimedAt = null; return m;
+        }).catch(err => console.error("[USAGE DASHBOARD] Refresh request to other PCs failed:", err));
+    });
 }
 
 /* ==========================================================================
