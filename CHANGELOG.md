@@ -4,6 +4,31 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [Unreleased]
+
+### App op je telefoon zetten is makkelijker te vinden
+
+Raimond wist niet waar hij de telefoon-app kon installeren. De QR-code stond onderaan het
+Mobile Sync-blok in Settings (130 px), met de stap "Add the page to your home screen" zonder
+uitleg per telefoon.
+
+- **Op de pc:** een telefoonknop naast de verversknop in de kopbalk en "Use on your phone"
+  in het zijmenu. Beide openen een venster met een grote QR-code (220 px), een knop om de
+  link te kopiëren en stappen voor iPhone (Safari → Delen → Zet op beginscherm) en Android
+  (Chrome → ⋮ → App installeren). Staat er nog geen sync, dan brengt het venster je naar
+  Mobile Sync.
+- **In Settings:** de installatiestappen noemen nu iPhone en Android apart, met een knop
+  naar hetzelfde venster.
+- **Op de telefoon:** zolang het dashboard in een gewone browsertab draait, staat bovenaan
+  een balk "Put this dashboard on your home screen". Op Android/Chrome met de echte
+  installeerknop, op iPhone met de Delen-uitleg. Wegklikken houdt hem 30 dagen weg; in de
+  geïnstalleerde app verschijnt hij niet.
+
+**Getest (preview):** balk op Android-telefoonformaat zichtbaar en wegklikbaar; venster met
+en zonder sync, sluiten met Esc en met ×, knop "Set up Mobile Sync" opent Settings.
+
+---
+
 ## [0.27.9] — 2026-09-24
 
 ### Analyze-tabblad liet de browser vastlopen

@@ -297,6 +297,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initGettingStartedBanner();
     renderEnvironmentIndicator();
     initOnboardingWizard();
+    initPhoneInstall();
     setTimeout(checkDeploySyncStatus, 1200);
     // Build info wordt nu gerenderd zodra de Settings-tab geopend wordt
     // (zie nav-tab click handler in setupEventListeners). Doe één rendering
@@ -5183,8 +5184,7 @@ function renderMobileSyncSettings() {
 
             // Configureerbare host (default = publieke GitHub Pages). Strip trailing slashes.
             const hostUrl = (res.lt_pwa_host || DEFAULT_PWA_HOST).replace(/\/+$/, "");
-            const providerParam = (config.provider && config.provider !== "npoint") ? `&provider=${config.provider}` : "";
-            const fullPwaUrl = `${hostUrl}/index.html?key=${config.pairingKey}&bin=${config.binId}${providerParam}`;
+            const fullPwaUrl = buildPhonePairingUrl(config, res.lt_pwa_host);
             pwaLink.href = fullPwaUrl;
             const hostLabel = hostUrl.replace(/^https?:\/\//, "");
             pwaLink.innerHTML = `${hostLabel} <i class="fa-solid fa-up-right-from-square"></i>`;
@@ -5233,6 +5233,133 @@ function renderMobileSyncSettings() {
             activeInfo.style.display = "none";
             pairingKeyInput.value = "";
         }
+    });
+}
+
+// 4b. The link the phone opens: PWA host + pairing key + bin (+ provider when not npoint).
+function buildPhonePairingUrl(config, pwaHost) {
+    const hostUrl = (pwaHost || DEFAULT_PWA_HOST).replace(/\/+$/, "");
+    const providerParam = (config.provider && config.provider !== "npoint") ? `&provider=${config.provider}` : "";
+    return `${hostUrl}/index.html?key=${config.pairingKey}&bin=${config.binId}${providerParam}`;
+}
+
+/* ==========================================================================
+   USE ON YOUR PHONE
+   PC (extension): a phone button in the header, sidebar and Mobile Sync settings opens a
+   dialog with a large QR code, a copy button and install steps for iPhone and Android.
+   Phone (PWA in a browser tab): a banner offers to install the app — the native install
+   prompt on Android/Chrome, Share → Add to Home Screen instructions on iPhone.
+   ========================================================================== */
+function initPhoneInstall() {
+    document.body.classList.toggle("is-pwa", !DB.isExtension);
+
+    const modal = document.getElementById("phone-install-modal");
+    if (modal && DB.isExtension) {
+        ["btn-phone-install", "btn-phone-install-sidebar", "btn-phone-install-settings"].forEach(id => {
+            const btn = document.getElementById(id);
+            if (btn) btn.addEventListener("click", openPhoneInstall);
+        });
+        const closeBtn = document.getElementById("btn-close-phone-install");
+        if (closeBtn) closeBtn.addEventListener("click", closePhoneInstall);
+        modal.addEventListener("click", (e) => { if (e.target === modal) closePhoneInstall(); });
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape" && modal.style.display !== "none") closePhoneInstall();
+        });
+
+        const gotoSync = document.getElementById("btn-phone-install-goto-sync");
+        if (gotoSync) gotoSync.addEventListener("click", () => {
+            closePhoneInstall();
+            const settingsTab = document.querySelector('.nav-tab[data-tab="tab-settings"]');
+            if (settingsTab) settingsTab.click();
+            const panel = document.getElementById("settings-mobile-sync-panel");
+            if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+
+        const copyBtn = document.getElementById("btn-phone-install-copy");
+        if (copyBtn) copyBtn.addEventListener("click", () => {
+            const url = copyBtn.dataset.url;
+            if (!url || !navigator.clipboard) return;
+            navigator.clipboard.writeText(url)
+                .then(() => showToast(`<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Phone link copied — send it to yourself only.`))
+                .catch(() => showToast(`<i class="fa-solid fa-circle-exclamation"></i> Could not copy the link.`));
+        });
+    }
+
+    if (!DB.isExtension) initPwaInstallBanner();
+}
+
+function openPhoneInstall() {
+    const modal = document.getElementById("phone-install-modal");
+    if (!modal) return;
+    DB.get(["lt_sync_config", "lt_pwa_host"], (res) => {
+        const config = res.lt_sync_config;
+        const paired = !!(config && config.enabled && config.pairingKey && config.binId);
+        document.getElementById("phone-install-paired").style.display = paired ? "grid" : "none";
+        document.getElementById("phone-install-unpaired").style.display = paired ? "none" : "block";
+        if (paired) {
+            const url = buildPhonePairingUrl(config, res.lt_pwa_host);
+            const qr = document.getElementById("phone-install-qr");
+            const img = document.createElement("img");
+            img.alt = "QR code with your phone link";
+            img.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=0&data=${encodeURIComponent(url)}`;
+            qr.replaceChildren(img);
+            document.getElementById("btn-phone-install-copy").dataset.url = url;
+        }
+        modal.style.display = "flex";
+        modal.setAttribute("aria-hidden", "false");
+    });
+}
+
+function closePhoneInstall() {
+    const modal = document.getElementById("phone-install-modal");
+    if (!modal) return;
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
+}
+
+function initPwaInstallBanner() {
+    const banner = document.getElementById("pwa-install-banner");
+    if (!banner) return;
+    const standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
+    if (standalone) return;
+
+    const DISMISS_KEY = "lt_pwa_install_dismissed_until";
+    let dismissedUntil = 0;
+    try { dismissedUntil = Number(localStorage.getItem(DISMISS_KEY)) || 0; } catch (e) { /* storage blocked */ }
+    if (Date.now() < dismissedUntil) return;
+
+    const ua = navigator.userAgent || "";
+    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const isAndroid = /Android/i.test(ua);
+    const text = document.getElementById("pwa-install-instructions");
+    const installBtn = document.getElementById("btn-pwa-install");
+    const hide = () => { banner.style.display = "none"; };
+
+    document.getElementById("btn-pwa-install-dismiss").addEventListener("click", () => {
+        try { localStorage.setItem(DISMISS_KEY, String(Date.now() + 30 * 24 * 60 * 60 * 1000)); } catch (e) { /* storage blocked */ }
+        hide();
+    });
+    window.addEventListener("appinstalled", hide);
+
+    if (isIOS) {
+        text.innerHTML = `Tap <strong>Share</strong> <i class="fa-solid fa-arrow-up-from-bracket"></i>, then <strong>Add to Home Screen</strong>.`;
+        banner.style.display = "flex";
+    } else if (isAndroid) {
+        text.innerHTML = `Tap <strong>⋮</strong> in Chrome, then <strong>Install app</strong> or <strong>Add to Home screen</strong>.`;
+        banner.style.display = "flex";
+    }
+
+    // Chrome/Edge (Android and desktop) offer a real install prompt.
+    window.addEventListener("beforeinstallprompt", (e) => {
+        e.preventDefault();
+        const deferred = e;
+        text.textContent = "Install it as an app — it opens without the browser bar.";
+        installBtn.style.display = "inline-flex";
+        installBtn.onclick = () => {
+            deferred.prompt();
+            deferred.userChoice.then(choice => { if (choice && choice.outcome === "accepted") hide(); }).catch(() => {});
+        };
+        banner.style.display = "flex";
     });
 }
 

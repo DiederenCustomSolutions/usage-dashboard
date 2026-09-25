@@ -123,6 +123,17 @@
         <!-- MAIN DASHBOARD CONTENT (Hidden until logged in) -->
         <div id="dashboard-container" class="main-content" style="display: none;">
 
+            <!-- Phone only: offer to install the PWA when it runs in a normal browser tab -->
+            <div id="pwa-install-banner" class="pwa-install-banner" style="display:none;" role="region" aria-label="Install the app">
+                <i class="fa-solid fa-mobile-screen-button pwa-install-icon"></i>
+                <div class="pwa-install-text">
+                    <strong>Put this dashboard on your home screen</strong>
+                    <span id="pwa-install-instructions">It opens like an app, without the browser bar.</span>
+                </div>
+                <button type="button" id="btn-pwa-install" class="btn-primary" style="display:none;">Install</button>
+                <button type="button" id="btn-pwa-install-dismiss" class="pwa-install-dismiss" title="Not now" aria-label="Not now"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
             <!-- HEADER -->
             <header class="glass-panel app-header">
                 <div class="app-logo">
@@ -154,6 +165,9 @@
                     <div class="header-sync-actions">
                         <button id="btn-sync-all" class="btn-sync-header" title="Refresh usage data from Claude &amp; ChatGPT">
                             <i class="fa-solid fa-arrows-rotate"></i>
+                        </button>
+                        <button type="button" id="btn-phone-install" class="btn-sync-header extension-only" title="Use on your phone" aria-label="Use on your phone">
+                            <i class="fa-solid fa-mobile-screen-button"></i>
                         </button>
                         <a href="https://claude.ai/settings/usage" target="_blank" class="sync-shortcut-icon claude" title="Claude Settings (Live sync)">
                             <img src="assets/anthropic-ai-badge.svg" alt="Anthropic AI">
@@ -963,10 +977,13 @@
 
                                         <p class="desc mb-2" style="font-size: 0.78rem;"><strong>How to install on your phone:</strong></p>
                                         <ol class="desc" style="padding-left: 1.25rem; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px;">
-                                            <li>Scan the QR code or tap the link below on your phone.</li>
-                                            <li>Add the page to your home screen (install as a PWA).</li>
-                                            <li>Your data now syncs live and securely!</li>
+                                            <li>Scan the QR code with your phone's camera (or send yourself the link).</li>
+                                            <li><strong>iPhone:</strong> in Safari tap Share <i class="fa-solid fa-arrow-up-from-bracket"></i> → <em>Add to Home Screen</em>.<br><strong>Android:</strong> in Chrome tap ⋮ → <em>Install app</em> (or <em>Add to Home screen</em>).</li>
+                                            <li>Open the new icon on your home screen — your data syncs live.</li>
                                         </ol>
+                                        <button type="button" id="btn-phone-install-settings" class="btn-secondary w-100" style="margin-bottom: 12px; font-size: 0.8rem; padding: 8px;">
+                                            <i class="fa-solid fa-mobile-screen-button"></i> Show large QR code &amp; steps
+                                        </button>
 
                                         <!-- QR Code / Link container -->
                                         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px; margin-top: 8px; gap: 8px; width: 100%;">
@@ -1037,6 +1054,9 @@
             <button class="btn-add-profile-tab sidebar-add-profile-btn" id="btn-open-onboarding-sidebar">
                 <i class="fa-solid fa-route"></i> Guided setup
             </button>
+            <button class="btn-add-profile-tab sidebar-add-profile-btn extension-only" id="btn-phone-install-sidebar">
+                <i class="fa-solid fa-mobile-screen-button"></i> Use on your phone
+            </button>
 
             <!-- Add profile panel -->
             <div id="add-profile-panel" class="sidebar-add-profile-panel" style="display:none;">
@@ -1080,6 +1100,52 @@
     </aside>
 
     <!-- ONBOARDING WIZARD -->
+    <!-- Use on your phone: large QR + per-platform install steps (extension only) -->
+    <div id="phone-install-modal" class="onboarding-modal" style="display:none;" aria-hidden="true">
+        <div class="onboarding-dialog phone-install-dialog" role="dialog" aria-modal="true" aria-labelledby="phone-install-title">
+            <div class="onboarding-header">
+                <div>
+                    <div class="onboarding-kicker">Mobile app</div>
+                    <h2 id="phone-install-title">Use the dashboard on your phone</h2>
+                </div>
+                <button type="button" id="btn-close-phone-install" class="onboarding-close" title="Close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div id="phone-install-unpaired" class="phone-install-unpaired" style="display:none;">
+                <p>Your phone reads the numbers from a sync that this PC fills. There is no sync on this PC yet.</p>
+                <button type="button" id="btn-phone-install-goto-sync" class="btn-primary"><i class="fa-solid fa-key"></i> Set up Mobile Sync</button>
+            </div>
+
+            <div id="phone-install-paired" class="phone-install-body" style="display:none;">
+                <div class="phone-install-qr-col">
+                    <div id="phone-install-qr" class="phone-install-qr" aria-label="QR code with your phone link"></div>
+                    <p class="phone-install-hint">Point your phone's camera at the code.</p>
+                    <button type="button" id="btn-phone-install-copy" class="btn-secondary w-100"><i class="fa-solid fa-copy"></i> Copy phone link</button>
+                    <p class="phone-install-secret"><i class="fa-solid fa-lock"></i> The link contains your secret pairing code. Only send it to yourself.</p>
+                </div>
+                <div class="phone-install-steps">
+                    <div class="phone-install-platform">
+                        <h3><i class="fa-brands fa-apple"></i> iPhone</h3>
+                        <ol>
+                            <li>Open the link in <strong>Safari</strong>.</li>
+                            <li>Tap <strong>Share</strong> <i class="fa-solid fa-arrow-up-from-bracket"></i> at the bottom.</li>
+                            <li>Choose <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li>
+                        </ol>
+                    </div>
+                    <div class="phone-install-platform">
+                        <h3><i class="fa-brands fa-android"></i> Android</h3>
+                        <ol>
+                            <li>Open the link in <strong>Chrome</strong>.</li>
+                            <li>Tap <strong>Install app</strong> in the banner, or <strong>⋮</strong> → <strong>Install app</strong> / <strong>Add to Home screen</strong>.</li>
+                            <li>Confirm with <strong>Install</strong>.</li>
+                        </ol>
+                    </div>
+                    <p class="phone-install-hint">Open the new <strong>Usage Dashboard</strong> icon on your home screen. Tap <i class="fa-solid fa-arrows-rotate"></i> to ask this PC for a fresh measurement.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="onboarding-modal" class="onboarding-modal" style="display:none;" aria-hidden="true">
         <div class="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
             <div class="onboarding-header">
