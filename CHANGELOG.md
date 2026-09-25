@@ -4,6 +4,23 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [Unreleased]
+
+### Telefoon-verversing opent geen tabbladen meer voor diensten zonder inlog
+
+Op Raimonds pc (alleen Claude) opende elk verversverzoek van de telefoon ook onzichtbare
+ChatGPT- en Z.ai-tabbladen. Na ~20 s kwam er dan "No data received" in de database. Het
+filter "alleen diensten meten die dit profiel ooit heeft geleverd" werkte niet: een nieuw
+profiel krijgt lege plekken (`chatgpt: null`, `zai: null`), en die telden als "geleverd".
+
+- Alleen diensten waarvan echt een meting is opgeslagen tellen nog mee.
+- Een profiel dat nog niets heeft gemeten, probeert zoals voorheen alle drie.
+
+**Gemeten 25-9 (Raimond, vóór de fix):** telefoon toont Claude na 3,0 s. Daarna liepen er
+nog ~20 s tabbladen voor ChatGPT en Z.ai, die alleen een foutmelding opleverden.
+
+---
+
 ## [0.27.9] — 2026-09-24
 
 ### Analyze-tabblad liet de browser vastlopen
