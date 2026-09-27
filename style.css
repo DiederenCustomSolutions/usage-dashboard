@@ -2817,3 +2817,73 @@ body.auth-view .app-container {
     animation: slideDown 0.2s ease;
 }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Use on your phone (extension) + install banner (PWA) ─────────────────── */
+body.is-pwa .extension-only { display: none !important; }
+#btn-phone-install:hover i { transform: none; }
+
+.phone-install-dialog { width: min(680px, calc(100vw - 32px)); }
+.phone-install-body {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 22px;
+    align-items: start;
+}
+.phone-install-qr-col { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.phone-install-qr {
+    width: 236px;
+    height: 236px;
+    padding: 8px;
+    background: #fff;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.phone-install-qr img { display: block; width: 220px; height: 220px; }
+.phone-install-hint { font-size: 0.78rem; color: var(--text-muted); margin: 0; line-height: 1.5; text-align: center; }
+.phone-install-steps .phone-install-hint { text-align: left; }
+.phone-install-secret { font-size: 0.7rem; color: var(--accent-yellow); margin: 0; line-height: 1.4; text-align: center; }
+.phone-install-steps { display: flex; flex-direction: column; gap: 14px; }
+.phone-install-platform {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 12px 14px;
+}
+.phone-install-platform h3 { margin: 0 0 8px; font-size: 0.95rem; color: #fff; display: flex; align-items: center; gap: 8px; }
+.phone-install-platform ol { margin: 0; padding-left: 1.2rem; font-size: 0.82rem; color: var(--text-main); display: flex; flex-direction: column; gap: 5px; line-height: 1.45; }
+.phone-install-unpaired p { color: var(--text-main); font-size: 0.88rem; line-height: 1.5; margin: 0 0 14px; }
+
+@media (max-width: 640px) {
+    .phone-install-body { grid-template-columns: 1fr; }
+}
+
+.pwa-install-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(var(--color-gemini-rgb), 0.35);
+    background: rgba(var(--color-gemini-rgb), 0.12);
+    color: var(--text-main);
+    animation: slideDown 0.2s ease;
+}
+.pwa-install-icon { font-size: 1.3rem; color: var(--color-gemini); flex-shrink: 0; }
+.pwa-install-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; font-size: 0.8rem; line-height: 1.4; }
+.pwa-install-text strong { font-size: 0.85rem; color: #fff; }
+.pwa-install-text span { color: var(--text-muted); }
+#btn-pwa-install { padding: 7px 14px; font-size: 0.8rem; flex-shrink: 0; }
+.pwa-install-dismiss {
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.pwa-install-dismiss:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
