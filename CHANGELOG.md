@@ -4,6 +4,11 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.10] — 2026-10-02
+
+### Fixed
+- A refresh no longer measures services that are switched off under Settings → visible blocks. Before, a PC still opened a hidden Z.ai tab on every refresh and logged a "not logged in" error, even with Z.ai switched off.
+
 ## [0.27.9] — 2026-09-24
 
 ### Analyze-tabblad liet de browser vastlopen

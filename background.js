@@ -826,7 +826,10 @@ function checkForRemoteRefreshRequestBG() {
             // tabs for services this profile is not logged in to cost 16-20s and an error.
             const user = (res.lt_users || {})[res.lt_current_user] || {};
             const known = Object.keys(user.syncStatus || {}).filter(p => ["claude", "chatgpt", "zai"].includes(p));
-            const providers = known.length ? known : ["claude", "chatgpt", "zai"];
+            // Providers switched off in Settings (shared dashboardConfig) are never measured.
+            const off = (flags && flags.dashboardConfig && flags.dashboardConfig.providersOff) || {};
+            const providers = (known.length ? known : ["claude", "chatgpt", "zai"]).filter(p => !off[p]);
+            if (!providers.length) return;
             logSync(`[Cloud Remote BG] Phone requested a refresh ${Math.round((Date.now() - reqTime) / 1000)}s ago — measuring: ${providers.join(", ")}.`);
             providers.forEach((p, i) => setTimeout(() => triggerScrapeFromBackground(p, config, profileId, profileLabel), i * 1500));
         })
