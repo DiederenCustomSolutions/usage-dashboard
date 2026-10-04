@@ -8,9 +8,9 @@
 #   git add -A
 #   git commit -m "Release v0.7.0"
 #   git tag v0.7.0
-#   git push && git push --tags
+#   .\release.ps1   -> push + agents-pc meteen bijwerken (geen timers: de release is de trigger)
 #   -> GitHub maakt automatisch een Release aan
-#   -> chrome://extensions -> Reload
+#   -> pc met extensie: oranje versielabel in het dashboard -> klik
 
 param(
     [Parameter(Mandatory=$true)]
@@ -60,8 +60,7 @@ Write-Host "Vergeet niet de CHANGELOG.md bij te werken, dan:" -ForegroundColor Y
 Write-Host "  git add -A"
 Write-Host "  git commit -m `"Release v$Version`""
 Write-Host "  git tag v$Version"
-Write-Host "  git push"
-Write-Host "  git push --tags"
+Write-Host "  .\release.ps1   (push + agents-pc meteen bijwerken)"
 Write-Host ""
 Write-Host "GitHub maakt automatisch een Release aan via de Action." -ForegroundColor Green
-Write-Host "Daarna: chrome://extensions -> Reload knop." -ForegroundColor Green
+Write-Host "Daarna op een pc met de extensie: klik op het oranje versielabel in het dashboard." -ForegroundColor Green

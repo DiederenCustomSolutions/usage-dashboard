@@ -4,6 +4,21 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.15] — 2026-10-04
+
+### Updates start on a trigger, never on a timer
+
+Rob: "things should only start running when there is a trigger for it — no wasteful timers".
+
+- **`release.ps1`** (new): publishes a release that is ready locally and updates agents-pc in the same
+  go. Checks that nothing is uncommitted and that tag `v<version>` is on the last commit, pushes main
+  plus every tag GitHub does not have yet, then runs `~/bin/usage-chrome-autoupdate.sh` on agents-pc
+  over ssh (fast-forward of `~/usage-dashboard-proef` + restart of the four measuring Chromes; stops
+  on local changes) and shows the result. The push is the trigger — nothing polls GitHub.
+  `bump-version.ps1` now points to it.
+- The version label no longer rechecks GitHub every 30 minutes (added in 0.27.13); it only rechecks
+  when the dashboard comes back into view (at most every 5 minutes).
+
 ## [0.27.14] — 2026-10-04
 
 ### Opening the dashboard refreshes, just like the refresh button — and nothing else does

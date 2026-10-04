@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.14";
+const APP_VERSION = "0.27.15";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -312,15 +312,14 @@ document.addEventListener("DOMContentLoaded", () => {
     announceSelfUpdateResult();
     // Opening the dashboard on a PC measures, just like the refresh button (the PWA waits for its first cloud read).
     if (DB.isExtension) setTimeout(refreshOnOpen, 1500);
-    // A dashboard tab often stays open for days: keep the version label current.
+    // A dashboard tab often stays open for days: recheck the versions when it comes back into view.
+    // Deliberately no timer (Rob: work only starts on a trigger).
     let lastVersionCheck = Date.now();
-    const recheckVersions = () => {
-        if (Date.now() - lastVersionCheck < 5 * 60 * 1000) return;
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible" || Date.now() - lastVersionCheck < 5 * 60 * 1000) return;
         lastVersionCheck = Date.now();
         checkDeploySyncStatus().then(refreshVersionPeers);
-    };
-    setInterval(recheckVersions, 30 * 60 * 1000);
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") recheckVersions(); });
+    });
     // Build info wordt nu gerenderd zodra de Settings-tab geopend wordt
     // (zie nav-tab click handler in setupEventListeners). Doe één rendering
     // bij start zodat het slot meteen gevuld is als gebruiker daar al staat.

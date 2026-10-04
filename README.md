@@ -60,6 +60,12 @@ The whole payload is **E2E encrypted**; without the pairing key (shared only via
 > downloads and verifies the release, writes it into the folder and reloads itself. A git checkout is never
 > written to: there, `git pull` first, then the button only reloads. The PWA updates itself.
 
+## Release
+
+`.\bump-version.ps1 -Version X.Y.Z` → update `CHANGELOG.md` → commit → `git tag vX.Y.Z` → **`.\release.ps1`**.
+The release script pushes main + new tags (GitHub Pages and the Release follow automatically) and
+then updates the measuring Chromes on agents-pc over ssh. Nothing runs on a timer: the release is the trigger.
+
 ## Pair a phone or a second profile
 
 - In the dashboard: **Settings → Mobile Sync** → generate a pairing code (QR + link).
