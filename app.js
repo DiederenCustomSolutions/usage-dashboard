@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.12";
+const APP_VERSION = "0.27.13";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -142,6 +142,7 @@ function renderSyncDevices() {
         btnForce.dataset.wired = "1";
         btnForce.addEventListener("click", forceAppUpdate);
     }
+    renderSelfUpdateButton();
 
     const row = (name, version, when, extra) => {
         const outdated = version && version !== "?" && version !== APP_VERSION;
@@ -183,7 +184,7 @@ function renderSyncDevices() {
                 .some(d => d && d.appVersion && d.appVersion !== APP_VERSION);
             if (anyOutdated) {
                 rows.push(`<p class="desc" style="margin-top:8px; color:var(--accent-yellow);">
-                    <i class="fa-solid fa-circle-info"></i> A device runs an older version. On a phone: close the app fully and reopen it. In Chrome: reload the extension on <code>chrome://extensions</code>.</p>`);
+                    <i class="fa-solid fa-circle-info"></i> A device runs an older version. On a phone: close the app fully and reopen it. On that PC: open the dashboard and click the version label at the top (<b>Update</b>).</p>`);
             }
             slot.innerHTML = rows.join("");
         }).catch(() => { slot.innerHTML = thisDevice + `<p class="desc" style="margin-top:6px;">Could not read the other devices.</p>`; });
@@ -305,7 +306,19 @@ document.addEventListener("DOMContentLoaded", () => {
     initGettingStartedBanner();
     renderEnvironmentIndicator();
     initOnboardingWizard();
-    setTimeout(checkDeploySyncStatus, 1200);
+    // Newest version on GitHub first, then which PCs are behind it.
+    setTimeout(() => checkDeploySyncStatus().then(refreshVersionPeers), 1200);
+    renderVersionBadge();
+    announceSelfUpdateResult();
+    // A dashboard tab often stays open for days: keep the version label current.
+    let lastVersionCheck = Date.now();
+    const recheckVersions = () => {
+        if (Date.now() - lastVersionCheck < 5 * 60 * 1000) return;
+        lastVersionCheck = Date.now();
+        checkDeploySyncStatus().then(refreshVersionPeers);
+    };
+    setInterval(recheckVersions, 30 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") recheckVersions(); });
     // Build info wordt nu gerenderd zodra de Settings-tab geopend wordt
     // (zie nav-tab click handler in setupEventListeners). Doe één rendering
     // bij start zodat het slot meteen gevuld is als gebruiker daar al staat.
@@ -397,9 +410,17 @@ async function checkDeploySyncStatus() {
         const match = remoteCode.match(/const\s+APP_VERSION\s*=\s*["']([^"']+)["']/);
         const deployedVersion = match ? match[1] : "";
         if (!deployedVersion) throw new Error("Version not found");
+        latestPublishedVersion = deployedVersion;
+        renderVersionBadge();
 
         if (deployedVersion === APP_VERSION) {
             setDeploySyncIndicator("ok", "PWA Synced", `Mobile/PWA version is synced with this dashboard: v${deployedVersion}`);
+        } else if (compareVersions(deployedVersion, APP_VERSION) > 0) {
+            setDeploySyncIndicator(
+                "warning",
+                "Update available",
+                `v${deployedVersion} is on GitHub; this dashboard still runs v${APP_VERSION}. Click the version label at the top to update.`
+            );
         } else {
             setDeploySyncIndicator(
                 "warning",
@@ -424,6 +445,376 @@ function setDeploySyncIndicator(status, label, detail) {
     indicator.title = detail;
     indicator.setAttribute("aria-label", detail);
     if (text) text.textContent = label;
+}
+
+/* ==========================================================================
+   VERSION LABEL + SELF-UPDATE FROM GITHUB (extension only)
+   An unpacked extension is never updated by Chrome, and it cannot replace its own
+   files. So every PC stayed on whatever its folder held until someone updated that
+   folder by hand. The version label in the header shows the running version; on a
+   PC with a newer release on GitHub it turns into an update button that writes the
+   release into the extension folder (File System Access; the folder is chosen once)
+   and reloads the extension.
+   ========================================================================== */
+const UPDATE_REPO = "DiederenCustomSolutions/usage-dashboard";
+const UPDATE_HANDLE_DB = "ud-self-update";
+// Repo paths that are not part of the extension itself (docs, tooling, archive).
+const UPDATE_SKIP = [/^old\//, /^\.github\//, /^\.claude\//, /^\.gitignore$/, /\.md$/i, /\.ps1$/i];
+// A PC that has not been seen for this long no longer counts as "behind".
+const VERSION_BEHIND_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
+
+let latestPublishedVersion = null;   // newest version on GitHub Pages (= main), from checkDeploySyncStatus
+let versionPeerState = null;         // { behind: [{label, version}] } from the shared status nodes
+let selfUpdateBusy = false;
+let selfUpdateDoneAt = 0;            // set after a successful update: the label says so for a while
+
+function compareVersions(a, b) {
+    const pa = String(a || "0").split(".").map(n => parseInt(n, 10) || 0);
+    const pb = String(b || "0").split(".").map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < 3; i++) {
+        if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1;
+    }
+    return 0;
+}
+
+function runningVersion() {
+    try { if (DB.isExtension) return chrome.runtime.getManifest().version; } catch (e) {}
+    return APP_VERSION;
+}
+
+function selfUpdateAvailable() {
+    return !!(DB.isExtension && latestPublishedVersion && compareVersions(latestPublishedVersion, runningVersion()) > 0);
+}
+
+function renderVersionBadge(busyText) {
+    const badge = document.getElementById("version-badge");
+    if (!badge) return;
+    if (!badge.dataset.wired) {
+        badge.dataset.wired = "1";
+        badge.addEventListener("click", () => {
+            if (selfUpdateBusy) return;
+            if (selfUpdateAvailable()) runSelfUpdate();
+            else openVersionsAndUpdateBlock();
+        });
+    }
+    const running = runningVersion();
+    const behind = (versionPeerState && versionPeerState.behind) || [];
+    let state = "ok", text = `v${running}`, title = `This dashboard runs v${running}. Click for versions & devices.`;
+    if (busyText) {
+        state = "busy"; text = busyText; title = busyText;
+    } else if (selfUpdateAvailable()) {
+        state = "update"; text = `v${running} → Update to v${latestPublishedVersion}`;
+        title = `v${latestPublishedVersion} is available on GitHub. Click to update this PC.`;
+    } else if (behind.length) {
+        state = "behind"; text = `v${running} · ${behind.length} PC${behind.length > 1 ? "s" : ""} behind`;
+        title = "Runs an older version: " + behind.map(b => `${b.label} (v${b.version})`).join(", ") + ". Click for versions & devices.";
+    } else if (Date.now() - selfUpdateDoneAt < 20000) {
+        state = "updated"; text = `v${running} ✓ Updated`;
+    }
+    badge.dataset.state = state;
+    badge.textContent = text;
+    badge.title = title;
+    badge.setAttribute("aria-label", title);
+    renderSelfUpdateButton();
+}
+
+// Reads the shared status nodes and remembers which PCs run an older version than the newest one known.
+function refreshVersionPeers() {
+    getActiveSyncConfig().then((cfg) => {
+        if (!cfg || !cfg.binId) return;
+        return cs2ReadState(cfg).then((doc) => {
+            const newest = [APP_VERSION, latestPublishedVersion].reduce((a, b) => (b && compareVersions(b, a) > 0 ? b : a));
+            const now = Date.now();
+            const behind = [];
+            Object.keys((doc && doc.profiles) || {}).forEach((pid) => {
+                const p = doc.profiles[pid] || {};
+                if (!p.appVersion || p.appVersion === "?") return;
+                if (p.lastSeen && now - p.lastSeen > VERSION_BEHIND_MAX_AGE_MS) return;
+                if (compareVersions(newest, p.appVersion) > 0) behind.push({ label: p.label || pid, version: p.appVersion });
+            });
+            versionPeerState = { behind };
+            renderVersionBadge();
+        });
+    }).catch(() => {});
+}
+
+// Extra button next to "Force update" in Settings → Versions & devices (extension only).
+function renderSelfUpdateButton() {
+    const btn = document.getElementById("btn-github-update");
+    if (!btn) return;
+    if (!DB.isExtension) { btn.style.display = "none"; return; }
+    btn.style.display = "";
+    if (!btn.dataset.wired) {
+        btn.dataset.wired = "1";
+        btn.addEventListener("click", () => { if (!selfUpdateBusy) runSelfUpdate(); });
+    }
+    btn.title = selfUpdateAvailable()
+        ? `Write v${latestPublishedVersion} from GitHub into this extension's folder and reload it`
+        : "Check GitHub for a newer version and install it into this extension's folder";
+}
+
+// ---- Folder handle (kept in IndexedDB so the folder only has to be chosen once) ----
+function selfUpdateDb(mode, value) {
+    return new Promise((resolve, reject) => {
+        const open = indexedDB.open(UPDATE_HANDLE_DB, 1);
+        open.onupgradeneeded = () => open.result.createObjectStore("kv");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+            const tx = open.result.transaction("kv", mode === "put" || mode === "delete" ? "readwrite" : "readonly");
+            const store = tx.objectStore("kv");
+            const req = mode === "put" ? store.put(value, "extensionDir") : mode === "delete" ? store.delete("extensionDir") : store.get("extensionDir");
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        };
+    });
+}
+
+// Small modal in the dashboard style. Resolves with the id of the pressed button (null = closed).
+function selfUpdateDialog(title, html, buttons) {
+    return new Promise((resolve) => {
+        document.getElementById("self-update-dialog")?.remove();
+        const overlay = document.createElement("div");
+        overlay.id = "self-update-dialog";
+        overlay.className = "self-update-overlay";
+        overlay.innerHTML = `<div class="self-update-box" role="dialog" aria-modal="true">
+            <h3>${title}</h3><div class="self-update-body">${html}</div>
+            <div class="self-update-actions">${buttons.map(b => `<button type="button" class="btn-small${b.primary ? " primary" : ""}" data-id="${b.id}">${b.label}</button>`).join("")}</div>
+        </div>`;
+        const close = (id) => { overlay.remove(); resolve(id); };
+        overlay.addEventListener("click", (e) => {
+            const id = e.target.closest("button[data-id]")?.dataset.id;
+            if (id) close(id);
+            else if (e.target === overlay) close(null);
+        });
+        document.body.appendChild(overlay);
+    });
+}
+
+const SELF_UPDATE_FOLDER_HELP = `<ol>
+    <li>Open <code>chrome://extensions</code> and click <b>Details</b> under <i>Usage Dashboard</i>.</li>
+    <li>Under <b>Source</b> / <b>Loaded from</b> you see the folder this extension runs from.</li>
+    <li>Click <b>Choose folder</b> below, select exactly that folder and allow Chrome to edit files there.</li>
+</ol>
+<p class="desc">You only do this once per PC. Folders under AppData or Program Files cannot be chosen (Chrome blocks system folders).</p>`;
+
+// Returns a folder handle with write permission, or null when the user cancelled.
+// Must run directly from a click: Chrome only shows the picker/permission prompt for a user gesture.
+async function getExtensionDirHandle(forceChoose) {
+    let dir = null;
+    if (!forceChoose) { try { dir = await selfUpdateDb("get"); } catch (e) {} }
+    if (dir) {
+        let perm = await dir.queryPermission({ mode: "readwrite" });
+        if (perm !== "granted") perm = await dir.requestPermission({ mode: "readwrite" });
+        if (perm === "granted") return dir;
+        // Denied: offer to pick again (the folder may have moved).
+    }
+    const choice = await selfUpdateDialog(
+        `<i class="fa-solid fa-folder-open"></i> Which folder holds this extension?`,
+        SELF_UPDATE_FOLDER_HELP,
+        [{ id: "cancel", label: "Cancel" }, { id: "choose", label: "Choose folder", primary: true }]
+    );
+    if (choice !== "choose") return null;
+    try {
+        dir = await window.showDirectoryPicker({ id: "usage-dashboard-extension", mode: "readwrite" });
+    } catch (e) {
+        if (e && e.name === "AbortError") return null;
+        throw e;
+    }
+    try { await selfUpdateDb("put", dir); } catch (e) {}
+    return dir;
+}
+
+// ---- Git blob hashing (GitHub's tree lists the git blob SHA-1 of every file) ----
+async function gitBlobSha(bytes) {
+    const header = new TextEncoder().encode(`blob ${bytes.length}\0`);
+    const all = new Uint8Array(header.length + bytes.length);
+    all.set(header, 0);
+    all.set(bytes, header.length);
+    const digest = await crypto.subtle.digest("SHA-1", all);
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function stripCarriageReturns(bytes) {
+    if (!bytes.includes(13)) return null;
+    const out = new Uint8Array(bytes.length);
+    let n = 0;
+    for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] === 13 && bytes[i + 1] === 10) continue;
+        out[n++] = bytes[i];
+    }
+    return out.slice(0, n);
+}
+
+// Both hashes of a local file: as stored, and with Windows line endings (CRLF) turned into LF
+// (a Windows git checkout or zip has CRLF; the repository itself has LF).
+async function localFileShas(bytes) {
+    const shas = [await gitBlobSha(bytes)];
+    const lf = stripCarriageReturns(bytes);
+    if (lf) shas.push(await gitBlobSha(lf));
+    return shas;
+}
+
+async function readLocalFile(dir, path) {
+    const parts = path.split("/");
+    let d = dir;
+    try {
+        for (const p of parts.slice(0, -1)) d = await d.getDirectoryHandle(p);
+        const file = await (await d.getFileHandle(parts[parts.length - 1])).getFile();
+        return new Uint8Array(await file.arrayBuffer());
+    } catch (e) {
+        if (e && e.name === "NotFoundError") return null;
+        throw e;
+    }
+}
+
+async function writeLocalFile(dir, path, bytes) {
+    const parts = path.split("/");
+    let d = dir;
+    for (const p of parts.slice(0, -1)) d = await d.getDirectoryHandle(p, { create: true });
+    const writable = await (await d.getFileHandle(parts[parts.length - 1], { create: true })).createWritable();
+    await writable.write(bytes);
+    await writable.close();
+}
+
+// Runtime files of a release: path → blob SHA (from GitHub's tree of the tag).
+async function fetchReleaseTree(version) {
+    const res = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/git/trees/v${version}?recursive=1`, { cache: "no-store", credentials: "omit" });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(res.status === 403 ? "GitHub is limiting requests right now (try again in an hour)" : `GitHub answered HTTP ${res.status}`);
+    const json = await res.json();
+    if (json.truncated) throw new Error("GitHub returned an incomplete file list");
+    const files = {};
+    (json.tree || []).forEach((entry) => {
+        if (entry.type !== "blob") return;
+        if (UPDATE_SKIP.some(rx => rx.test(entry.path))) return;
+        files[entry.path] = entry.sha;
+    });
+    return files;
+}
+
+function selfUpdateFail(message) {
+    renderVersionBadge();
+    return selfUpdateDialog(`<i class="fa-solid fa-circle-exclamation"></i> Update not done`, message, [{ id: "ok", label: "OK", primary: true }]);
+}
+
+async function runSelfUpdate() {
+    if (!DB.isExtension || selfUpdateBusy) return;
+    selfUpdateBusy = true;
+    const running = runningVersion();
+    try {
+        // 1. The folder (first: no awaits on the network before this, the picker needs the click).
+        const dir = await getExtensionDirHandle(false);
+        if (!dir) { renderVersionBadge(); return; }
+        renderVersionBadge("Checking folder…");
+
+        // 2. Is it really this extension's folder?
+        const manifestBytes = await readLocalFile(dir, "manifest.json");
+        let diskManifest = null;
+        try { diskManifest = manifestBytes ? JSON.parse(new TextDecoder().decode(manifestBytes)) : null; } catch (e) {}
+        const me = chrome.runtime.getManifest();
+        const sameExtension = diskManifest && (me.key ? diskManifest.key === me.key : diskManifest.name === me.name);
+        if (!sameExtension) {
+            try { await selfUpdateDb("delete"); } catch (e) {}
+            await selfUpdateFail(`<p>The folder <b>${dir.name}</b> is not the folder of this extension (its <code>manifest.json</code> is missing or belongs to something else). Nothing was changed.</p>${SELF_UPDATE_FOLDER_HELP}`);
+            return;
+        }
+
+        // 3. Newer files already on disk (git pull, Google Drive sync)? Then only a reload is needed.
+        if (compareVersions(diskManifest.version, running) > 0) {
+            await finishSelfUpdate(running, diskManifest.version);
+            return;
+        }
+
+        // 4. A git checkout is a developer folder: never write into it, git owns those files.
+        let isGitCheckout = false;
+        try { await dir.getDirectoryHandle(".git"); isGitCheckout = true; } catch (e) {}
+        if (isGitCheckout) {
+            await selfUpdateFail(`<p>This extension runs from a <b>git checkout</b> (<b>${dir.name}</b>). Get the new version there with <code>git pull</code> (or wait until Google Drive has synced it), then press the button again — it will then only reload the extension.</p>`);
+            return;
+        }
+
+        // 5. What is the newest version?
+        renderVersionBadge("Checking GitHub…");
+        if (!latestPublishedVersion || compareVersions(latestPublishedVersion, running) <= 0) await checkDeploySyncStatus();
+        const target = latestPublishedVersion;
+        if (!target || compareVersions(target, running) <= 0) {
+            renderVersionBadge();
+            showToast(`<i class="fa-solid fa-circle-check"></i> v${running} is the newest version.`);
+            return;
+        }
+
+        // 6. File lists of the running and the new release.
+        const [targetTree, currentTree] = await Promise.all([fetchReleaseTree(target), fetchReleaseTree(running)]);
+        if (!targetTree) { await selfUpdateFail(`<p>v${target} is on GitHub Pages, but its release tag is not there yet. Try again in a few minutes.</p>`); return; }
+        if (!currentTree) { await selfUpdateFail(`<p>Cannot find the release of the version that runs now (v${running}) on GitHub, so local changes cannot be checked. Nothing was changed.</p>`); return; }
+
+        // 7. Plan: which files change, and has anyone edited a file by hand? Then stop, write nothing.
+        renderVersionBadge("Comparing files…");
+        const toWrite = [];
+        const edited = [];
+        for (const path of Object.keys(targetTree)) {
+            const local = await readLocalFile(dir, path);
+            if (!local) { toWrite.push(path); continue; }
+            const shas = await localFileShas(local);
+            if (shas.includes(targetTree[path])) continue;                       // already the new content
+            if (currentTree[path] && shas.includes(currentTree[path])) toWrite.push(path);
+            else edited.push(path);
+        }
+        if (edited.length) {
+            await selfUpdateFail(`<p>These files in <b>${dir.name}</b> were changed by hand, so the update would overwrite someone's work:</p><ul>${edited.map(p => `<li><code>${p}</code></li>`).join("")}</ul><p>Nothing was changed.</p>`);
+            return;
+        }
+
+        // 8. Download everything and check every file against GitHub's hash before writing anything.
+        const downloads = {};
+        let done = 0;
+        for (const path of toWrite) {
+            renderVersionBadge(`Downloading ${++done}/${toWrite.length}…`);
+            const res = await fetch(`https://raw.githubusercontent.com/${UPDATE_REPO}/v${target}/${path.split("/").map(encodeURIComponent).join("/")}`, { cache: "no-store", credentials: "omit" });
+            if (!res.ok) throw new Error(`Download of ${path} failed (HTTP ${res.status})`);
+            const bytes = new Uint8Array(await res.arrayBuffer());
+            if (await gitBlobSha(bytes) !== targetTree[path]) throw new Error(`${path} did not arrive intact`);
+            downloads[path] = bytes;
+        }
+
+        // 9. Write; manifest.json last, so an interrupted update still shows the old version and can simply be retried.
+        renderVersionBadge("Installing…");
+        const order = toWrite.filter(p => p !== "manifest.json").concat(toWrite.includes("manifest.json") ? ["manifest.json"] : []);
+        for (const path of order) await writeLocalFile(dir, path, downloads[path]);
+
+        await finishSelfUpdate(running, target);
+    } catch (err) {
+        console.error("[Self-update]", err);
+        await selfUpdateFail(`<p>${(err && err.message) || err}</p><p>The extension keeps running v${running}.</p>`);
+    } finally {
+        selfUpdateBusy = false;
+    }
+}
+
+// Reload the extension; background.js reopens the dashboard afterwards (the reload closes this tab).
+async function finishSelfUpdate(from, to) {
+    renderVersionBadge(`Restarting as v${to}…`);
+    await new Promise(resolve => chrome.storage.local.set({ ud_self_update: { from, to, ts: Date.now() } }, resolve));
+    setTimeout(() => chrome.runtime.reload(), 300);
+}
+
+// After the reload: tell the user it worked (or that Chrome still runs the old version).
+function announceSelfUpdateResult() {
+    const params = new URLSearchParams(window.location.search);
+    const to = params.get("updated");
+    if (!to) return;
+    params.delete("updated");
+    const query = params.toString();
+    history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
+    const running = runningVersion();
+    if (compareVersions(running, to) >= 0) {
+        selfUpdateDoneAt = Date.now();
+        renderVersionBadge();
+        setTimeout(() => renderVersionBadge(), 20500);
+        showToast(`<i class="fa-solid fa-circle-check"></i> Updated to v${running}.`);
+    } else {
+        showToast(`<i class="fa-solid fa-triangle-exclamation"></i> Still running v${running} — reload the extension on chrome://extensions.`);
+    }
 }
 
 // Intercept background messages if running in Chrome Extension mode

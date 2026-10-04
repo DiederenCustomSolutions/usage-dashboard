@@ -4,6 +4,43 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.13] — 2026-10-04
+
+### Version in the header + Update button that installs the newest version from GitHub
+
+Rob: "a version number in an easy-to-see place and an update button that pulls the latest version
+from GitHub — now it always depends on which PC I had it changed on; Kevin and Raimond will have the
+same problem". An unpacked extension is never updated by Chrome and cannot replace its own files, so
+every PC stayed on whatever its folder held until someone updated that folder by hand.
+
+- **Version label** next to "Live Syncing" (PC and phone). Grey = up to date; **orange
+  "v0.27.13 → Update to v0.27.14"** on a PC when GitHub has a newer release; yellow
+  "1 PC behind" when a PC seen in the last 3 days runs an older version (hover shows which).
+  Click = update (orange) or jump to Settings → Versions & devices. Rechecked every 30 minutes and
+  when the tab comes back into view.
+- **Update** (orange label, or the new *Update* button next to *Force update* in Versions & devices,
+  extension only):
+  1. First time only: choose the folder the extension is loaded from (a short explanation shows
+     where to find it) and allow Chrome to edit files there. The folder is remembered (IndexedDB);
+     after choosing *Allow on every visit* in Chrome's prompt, an update is a single click.
+  2. Checks it is really this extension's folder (`manifest.json` with the same key).
+  3. Newer files already in the folder (git pull, Google Drive sync)? Only reloads the extension.
+  4. A **git checkout** (Rob's G: folder) is never written to — it says to `git pull` instead.
+  5. Downloads the release files of the tag from GitHub and checks every file against GitHub's
+     git hash before anything is written. Files edited by hand (compared with the release that runs
+     now; Windows line endings are ignored) stop the update — nothing is changed.
+  6. Writes the files (manifest last), reloads the extension and reopens the dashboard, which shows
+     "✓ Updated" on the label.
+- The sidebar "PWA Behind" pill now says **"Update available"** when GitHub is newer than this PC
+  (it said "PWA behind" in both directions).
+
+**Measured (separate test Chrome on Rob's PC, normal *Load unpacked*):** 0.27.11 → 0.27.12 straight
+from GitHub: all 15 runtime files identical to the release, extension enabled, service worker runs
+the new code. Git folder and hand-edited files refused with nothing written. Reload-only path
+reopens the dashboard with "✓ Updated". Chrome refuses folders under AppData ("contains system
+files"). ⚠️ On agents-pc Kevin's Chromes load the extension via DevTools: a reload switches it off
+there — keep updating agents-pc with `git pull` + the restart scripts.
+
 ## [0.27.12] — 2026-10-04
 
 ### ChatGPT refreshes as fast as Claude (own usage API)

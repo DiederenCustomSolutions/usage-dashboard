@@ -54,7 +54,11 @@ The whole payload is **E2E encrypted**; without the pairing key (shared only via
 3. The dashboard opens automatically (each Chrome profile auto-creates a local profile — no login needed).
 4. Open a `claude.ai` / `chatgpt.com` usage page once → the matching card appears.
 
-> Updates are **manual**: after a new version, click the 🔄 **Reload** button on `chrome://extensions`. The PWA updates itself.
+> **Updates:** when GitHub has a newer release, the version label in the header turns orange — click it.
+> The first time you choose the extension folder once (not under AppData / Program Files; Chrome blocks those)
+> and allow editing; choose *Allow on every visit* to make later updates a single click. The dashboard
+> downloads and verifies the release, writes it into the folder and reloads itself. A git checkout is never
+> written to: there, `git pull` first, then the button only reloads. The PWA updates itself.
 
 ## Pair a phone or a second profile
 

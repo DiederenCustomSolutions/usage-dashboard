@@ -35,6 +35,18 @@ chrome.runtime.onInstalled.addListener(() => {
     checkActiveTabForInvite();
 });
 
+// The dashboard's Update button writes the new release into the extension folder and reloads
+// the extension. That reload closes the dashboard tab, so reopen it here (only right after such an update).
+chrome.runtime.onInstalled.addListener(() => {
+    chrome.storage.local.get(["ud_self_update"], (res) => {
+        const update = res.ud_self_update;
+        if (!update) return;
+        chrome.storage.local.remove("ud_self_update");
+        if (!update.ts || Date.now() - update.ts > 3 * 60 * 1000) return;
+        chrome.tabs.create({ url: chrome.runtime.getURL(`index.html?updated=${encodeURIComponent(update.to || "")}`) });
+    });
+});
+
 // Ook bij browser-start opnieuw zetten (service workers worden gesuspend)
 chrome.runtime.onStartup.addListener(() => {
     ensureRemoteRefreshAlarm();
