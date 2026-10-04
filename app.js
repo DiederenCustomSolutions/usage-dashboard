@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.13";
+const APP_VERSION = "0.27.14";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -310,6 +310,8 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => checkDeploySyncStatus().then(refreshVersionPeers), 1200);
     renderVersionBadge();
     announceSelfUpdateResult();
+    // Opening the dashboard on a PC measures, just like the refresh button (the PWA waits for its first cloud read).
+    if (DB.isExtension) setTimeout(refreshOnOpen, 1500);
     // A dashboard tab often stays open for days: keep the version label current.
     let lastVersionCheck = Date.now();
     const recheckVersions = () => {
@@ -3165,43 +3167,19 @@ function setupEventListeners() {
     // Refresh All button
     const btnSyncAll = document.getElementById("btn-sync-all");
     if (btnSyncAll) {
-        btnSyncAll.addEventListener("click", () => {
-            if (isSyncClient()) {
-                // Telefoon: eerst direct de cloud-state ophalen zodat de UI meteen update,
-                // daarna parallel de PC vragen om opnieuw te scrapen voor verse data.
-                loadCloudUserData(true);
-                requestRemoteRefresh();
-            } else {
-                triggerSyncNow("claude");
-                setTimeout(() => triggerSyncNow("chatgpt"), 1000); // Stagger to prevent browser throttling
-                requestRefreshFromOtherPcs();
-            }
-        });
+        btnSyncAll.addEventListener("click", () => refreshAll(true));
     }
 
-    // Auto-Refresh when dashboard regains focus (max once per 2 minutes)
-    let lastAutoSync = Date.now();
+    // Back in view (tab switched back, phone app resumed) counts as opening the dashboard.
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
-            const now = Date.now();
-            // PWA/sync-client: ALTIJD herstellen bij terug-in-beeld, zonder de 2-minuten-rem.
+            // PWA/sync-client: ALTIJD herstellen bij terug-in-beeld, zonder rem.
             // Die rem stamt uit de tijd dat één lees-actie de volledige 255 KB-blob ophaalde;
             // sinds v0.26.0 is een lees-actie enkele KB (meta+status), dus de rem leverde
             // alleen nog maar oude data op de telefoon op. De stream moet hier óók opnieuw
             // opgebouwd worden — zie restartPwaCloudStream().
-            if (isSyncClient()) {
-                lastAutoSync = now;
-                restartPwaCloudStream("app weer in beeld");
-                return;
-            }
-            // Extensie-modus: scrapen kost een tabblad-reload, dus hier blijft de rem staan.
-            if (now - lastAutoSync > 120000) {
-                lastAutoSync = now;
-                console.log("Auto-refreshing usage limits upon tab focus...");
-                showToast(`<i class="fa-solid fa-arrows-rotate fa-spin"></i> Auto-refresh activated...`);
-                triggerSyncNow("claude");
-                setTimeout(() => triggerSyncNow("chatgpt"), 1000);
-            }
+            if (isSyncClient()) restartPwaCloudStream("app weer in beeld");
+            refreshOnOpen();
         }
     });
 
@@ -3671,6 +3649,34 @@ function openBackgroundScrapeTab(url) {
             showToast(`<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Sync complete!`);
         }, 16000);
     });
+}
+
+/* Measuring happens only when someone looks (Rob, 04-10-2026): when the refresh button is
+   pressed, and when the dashboard is opened or comes back into view. No timers. */
+const OPEN_REFRESH_MIN_GAP_MS = 2 * 60 * 1000;   // switching back and forth must not start a measurement every time
+let lastOpenRefreshAt = 0;
+let openRefreshWaitingForData = true;           // PWA: the first refresh waits for the first cloud read (baseline)
+
+function refreshAll(fromButton) {
+    if (isSyncClient()) {
+        // Telefoon/website: eerst direct de cloud-state ophalen zodat de UI meteen update,
+        // daarna parallel de PC vragen om opnieuw te scrapen voor verse data.
+        if (fromButton) loadCloudUserData(true);
+        requestRemoteRefresh();
+    } else {
+        triggerSyncNow("claude");
+        setTimeout(() => triggerSyncNow("chatgpt"), 1000); // Stagger to prevent browser throttling
+        requestRefreshFromOtherPcs();
+    }
+}
+
+// Opening the dashboard = pressing the refresh button (at most once per 2 minutes).
+function refreshOnOpen() {
+    if (!DB.isExtension && !isSyncClient()) return;              // a browser that is not paired has nothing to refresh
+    if (isSyncClient() && openRefreshWaitingForData) return;   // processNormalizedCloudDoc calls back once data is in
+    if (Date.now() - lastOpenRefreshAt < OPEN_REFRESH_MIN_GAP_MS) return;
+    lastOpenRefreshAt = Date.now();
+    refreshAll(false);
 }
 
 function triggerSyncNow(provider) {
@@ -5148,6 +5154,8 @@ function processNormalizedCloudDoc(doc, syncClient, isManual) {
         updateMobileSyncIndicator(true);
         stopSpinners();
         if (isManual) showToast(`<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Data synced!`);
+        // First data on this page: now the "opened" refresh can compare against it.
+        if (openRefreshWaitingForData) { openRefreshWaitingForData = false; refreshOnOpen(); }
         // V2: laad logs/threads lui na (pace-overlays + Analyze-tab) en hertekenen.
         if (!Array.isArray(doc.logs)) refreshPwaArchives(() => updateUI());
     } catch (err) {

@@ -4,6 +4,23 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.14] — 2026-10-04
+
+### Opening the dashboard refreshes, just like the refresh button — and nothing else does
+
+Rob: "a refresh only when the page is opened on the PC or the refresh button is pressed" (a fixed
+15-minute measurement was explicitly rejected).
+
+- **Opening the dashboard** (website/PWA, phone, or the extension page on a PC) now does exactly what
+  the refresh button does: the PCs are asked to measure, and an extension PC also measures itself.
+  The website/phone waits for its first cloud read, so the "is the data fresh yet" check has
+  something to compare with.
+- **Coming back to it** (switching back to the tab, reopening the phone app — which Android/iOS resume
+  instead of reload) counts as opening, at most once every 2 minutes so switching back and forth does
+  not start a measurement each time. Before, the phone only re-read the old numbers, and an extension
+  PC only re-measured itself, not the other PCs.
+- No timers: the PCs still only measure on such a request (the 30 s check for requests stays).
+
 ## [0.27.13] — 2026-10-04
 
 ### Version in the header + Update button that installs the newest version from GitHub
