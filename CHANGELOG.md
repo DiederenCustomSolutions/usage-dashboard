@@ -4,6 +4,29 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.12] — 2026-10-04
+
+### ChatGPT refreshes as fast as Claude (own usage API)
+
+Rob: refreshing ChatGPT took long compared to Claude, and two cards stopped updating. A ChatGPT
+refresh reloaded the heavy usage page and read the text; that regularly took more than the 20 s the
+refresh waits, so the card got "No data received".
+
+- ChatGPT limits now come from ChatGPT's own API — the same source the Settings → Usage page uses:
+  `GET /backend-api/wham/usage` with the access token from `/api/auth/session` (stays in the tab,
+  never stored). Works from any open chatgpt.com tab in about 1 s, no page reload. Same ladder as
+  Claude: message to the open tab → injection → reload the usage tab → temporary background tab.
+- Windows are recognised by length: ≤ 6 h = 5-hour limit, ~7 days = weekly, longer = monthly
+  (Codex monthly block). Personal plans with only a weekly limit (Kevin) show just the weekly bar.
+- Reset times are exact timestamps now (`reset5hAbsoluteTs`, `resetWeeklyAbsoluteTs`). The cards
+  showed "Resets in Resets in 2h 32m" with a 0% time bar; they now show "3h 57m" / "2d 1u" with the
+  right bar, like Claude. The text fields stay filled in the old form ("Reset 16:52",
+  "Reset 6 Oct 2026 13:57") so PCs on an older version still read them correctly.
+- Reading the page stays as the fallback, and it now also turns "Resets in 2d 1h" into a timestamp.
+
+**Measured (agents-pc, live):** Kevin (personal, weekly only) → weekly 100% left, reset 11 Oct 12:53;
+Kevin LXDG-DCS (team workspace) → 5 h 100%, weekly 70% left — identical to the page.
+
 ## [0.27.11] — 2026-10-04
 
 ### Fixed

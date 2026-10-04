@@ -885,7 +885,75 @@ function claudeUsageInPageFetch() {
         .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }
 
-function refreshClaudeViaOpenTabs(tabs, hooks) {
+/* Draait IN een chatgpt.com-tabblad (v0.27.12). executeScript serialiseert alléén deze
+   functie, dus hij mag niets buiten zichzelf gebruiken (bewust gelijk in content.js,
+   background.js en app.js). Dezelfde bron die de pagina Settings → Usage zelf gebruikt:
+   /backend-api/wham/usage, met het toegangstoken uit de eigen sessie. Het token blijft in
+   het tabblad en wordt nergens opgeslagen. */
+function chatgptUsageInPageFetch() {
+    const getJson = (p, headers) => fetch(p, { credentials: "include", cache: "no-store", headers: headers || {} })
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status + " op " + p))));
+    const two = (n) => String(n).padStart(2, "0");
+    const clock = (ts) => { const d = new Date(ts); return two(d.getHours()) + ":" + two(d.getMinutes()); };
+    const day = (ts) => { const d = new Date(ts); return d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" }) + " " + d.getFullYear() + " " + clock(ts); };
+    return getJson("/api/auth/session")
+        .then((s) => {
+            if (!s || !s.accessToken) throw new Error("niet ingelogd op chatgpt.com");
+            const headers = { Authorization: "Bearer " + s.accessToken };
+            if (s.account && s.account.id) headers["ChatGPT-Account-Id"] = s.account.id;
+            return getJson("/backend-api/wham/usage", headers);
+        })
+        .then((u) => {
+            const rl = (u && u.rate_limit) || {};
+            const wins = [rl.primary_window, rl.secondary_window].filter(w => w && typeof w.used_percent === "number");
+            const secs = (w) => Number(w.limit_window_seconds) || 0;
+            // used_percent = percentage VERBRUIKT; het dashboard rekent in "over".
+            const left = (w) => Math.max(0, Math.min(100, Math.round(100 - w.used_percent)));
+            const resetTs = (w) => (w.reset_at ? w.reset_at * 1000
+                : (typeof w.reset_after_seconds === "number" ? Date.now() + w.reset_after_seconds * 1000 : NaN));
+            const five  = wins.find(w => secs(w) > 0 && secs(w) <= 6 * 3600);
+            const week  = wins.find(w => secs(w) > 6 * 3600 && secs(w) <= 8 * 86400);
+            const month = wins.find(w => secs(w) > 8 * 86400);
+            if (!five && !week && !month) throw new Error("geen bekende limietvensters in de respons");
+
+            let data = null;
+            if (five || week) {
+                const pct5h = five ? left(five) : null;
+                const pctWeekly = week ? left(week) : null;
+                const ts5h = five ? resetTs(five) : NaN;
+                const tsWeek = week ? resetTs(week) : NaN;
+                data = {
+                    pctRemaining5h: pct5h,
+                    pctRemainingWeekly: pctWeekly,
+                    // Exacte tijdstippen zijn leidend. De tekst ("Reset 15:23", "Reset 6 Oct 2026
+                    // 14:31") is voor dashboards van vóór 0.27.12, die alleen die vorm lezen.
+                    reset5hAbsoluteTs: isNaN(ts5h) ? undefined : ts5h,
+                    resetWeeklyAbsoluteTs: isNaN(tsWeek) ? undefined : tsWeek,
+                    reset5h: isNaN(ts5h) ? "" : "Reset " + clock(ts5h),
+                    resetWeekly: isNaN(tsWeek) ? "" : "Reset " + day(tsWeek),
+                    pctRemaining: pct5h !== null ? pct5h : pctWeekly,
+                    messagesUsed: pct5h !== null ? Math.round(((100 - pct5h) / 100) * 120) : 0,
+                    source: "api",
+                    summary: `Via API: 5u=${pct5h}% over, week=${pctWeekly}% over.`
+                };
+            }
+            let monthly = null;
+            if (month) {
+                const tsMonth = resetTs(month);
+                monthly = {
+                    pctRemainingMonthly: left(month),
+                    pctRemaining: left(month),
+                    resetMonthly: isNaN(tsMonth) ? "" : "Reset " + day(tsMonth),
+                    source: "api",
+                    summary: `Via API: ${left(month)}% maandlimiet over.`
+                };
+            }
+            return { ok: true, data, monthly };
+        })
+        .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
+}
+
+function refreshViaOpenTabs(provider, tabs, hooks) {
     const h = hooks || {};
     // Eerst de usage-pagina (mag desnoods herladen), dan het actieve tabblad, dan de rest.
     const ordered = (tabs || []).slice().sort((a, b) => {
@@ -916,20 +984,23 @@ function refreshClaudeViaOpenTabs(tabs, hooks) {
         if (idx === 0) { if (injecting) return; injecting = true; }
         if (idx >= ordered.length || !chrome.scripting) { lastResort(); return; }
         chrome.scripting.executeScript(
-            { target: { tabId: ordered[idx].id }, func: claudeUsageInPageFetch },
+            { target: { tabId: ordered[idx].id }, func: provider === "chatgpt" ? chatgptUsageInPageFetch : claudeUsageInPageFetch },
             (results) => {
                 if (chrome.runtime.lastError) { void chrome.runtime.lastError; injectInto(idx + 1); return; }
                 const res = results && results[0] && results[0].result;
-                if (!res || !res.ok || !res.data) { injectInto(idx + 1); return; }
+                if (!res || !res.ok || !(res.data || res.monthly)) { injectInto(idx + 1); return; }
                 if (finish()) return;
-                handleTabSync("claude", res.data).catch(() => {});
+                // Na elkaar: handleTabSync doet lezen-wijzigen-schrijven op dezelfde opslag.
+                (res.data ? handleTabSync(provider, res.data) : Promise.resolve())
+                    .then(() => (res.monthly ? handleTabSync("codex", res.monthly) : null))
+                    .catch(() => {});
             }
         );
     };
 
     let pending = ordered.length;
     ordered.forEach((t) => {
-        chrome.tabs.sendMessage(t.id, { type: "REFRESH_NOW", provider: "claude" }, (resp) => {
+        chrome.tabs.sendMessage(t.id, { type: "REFRESH_NOW", provider }, (resp) => {
             void chrome.runtime.lastError;   // ongeldig/ontbrekend content script: negeren
             pending--;
             if (resp && resp.ok) { finish(); return; }
@@ -985,9 +1056,10 @@ function triggerScrapeFromBackground(provider, config, profileId, profileLabel) 
     chrome.tabs.query({ url: queryPattern }, (tabs) => {
         // Claude: altijd een tabblad gebruiken dat de gebruiker al open heeft staan —
         // messaging, dan injectie, dan herladen. Pas als er geen claude.ai-tab is,
-        // openen we een tijdelijk achtergrondtabblad. Zie refreshClaudeViaOpenTabs.
-        if (provider === "claude" && tabs && tabs.length) {
-            refreshClaudeViaOpenTabs(tabs, { onNewTab: openScrapeTab });
+        // openen we een tijdelijk achtergrondtabblad. Zie refreshViaOpenTabs.
+        // ChatGPT gaat sinds 0.27.12 dezelfde weg (eigen usage-API).
+        if ((provider === "claude" || provider === "chatgpt") && tabs && tabs.length) {
+            refreshViaOpenTabs(provider, tabs, { onNewTab: openScrapeTab });
             return;
         }
 

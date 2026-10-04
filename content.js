@@ -429,11 +429,18 @@ function triggerScrape() {
                 observeAndScrapeStable(scrapeClaudeUsage, { settleMs: 900, maxMs: 9000 });
             }
         });
-    } else if (url.includes("chatgpt.com") && (url.includes("analytics") || url.includes("settings/usage"))) {
-        logSync("[Scraper] ChatGPT analytics page gedetecteerd. Start scan...");
-        observeAndScrape(scrapeChatGPTUsage, false); // Do not disconnect so it scrapes after tab clicks!
-        // Codex maandelijkse gebruikslimiet staat op dezelfde analytics-pagina (apart blok).
-        observeAndScrape(scrapeCodexMonthly, false);
+    } else if (url.includes("chatgpt.com")) {
+        // Snelle pad (v0.27.12): ChatGPT's eigen usage-API, werkt op elke chatgpt.com-pagina.
+        // Op de usage-pagina zelf altijd vers meten — dat tabblad staat er juist voor open.
+        const onUsagePage = url.includes("analytics") || url.includes("settings/usage");
+        fetchChatGPTUsageViaApi(onUsagePage).catch(err => {
+            logSync(`[Scraper] ChatGPT API-pad mislukt (${err.message || err}) — terugvallen op de pagina uitlezen.`);
+            if (!onUsagePage) return;
+            logSync("[Scraper] ChatGPT usage-pagina gedetecteerd. Start scan...");
+            observeAndScrape(scrapeChatGPTUsage, false); // Do not disconnect so it scrapes after tab clicks!
+            // Codex maandelijkse gebruikslimiet staat op dezelfde pagina (apart blok).
+            observeAndScrape(scrapeCodexMonthly, false);
+        });
     } else if (url.includes("z.ai/manage-apikey/coding-plan/personal/usage")) {
         logSync("[Scraper] Z.Ai coding-plan usage page gedetecteerd. Start API sync...");
         scrapeZaiUsage();
@@ -492,6 +499,14 @@ try {
                         sendResponse({ ok: false, error: String(err && err.message || err) });
                     }
                 });
+            return true; // async antwoord
+        }
+        if (msg.provider === "chatgpt" && window.location.href.includes("chatgpt.com")) {
+            // Mislukt de API, dan neemt de achtergrond het over (injectie, daarna de
+            // usage-tab herladen, waar de pagina-scraper het vangnet is).
+            fetchChatGPTUsageViaApi(true)
+                .then(() => sendResponse({ ok: true, via: "api" }))
+                .catch(err => sendResponse({ ok: false, error: String(err && err.message || err) }));
             return true; // async antwoord
         }
     });
@@ -622,6 +637,113 @@ function fetchClaudeUsageViaApi(force = false) {
             logSync(`[Scraper] Claude usage via API: sessie=${pctSession}% over, week=${pctWeekly}% over`);
             return true;
         });
+}
+
+/* Draait IN een chatgpt.com-tabblad (v0.27.12). executeScript serialiseert alléén deze
+   functie, dus hij mag niets buiten zichzelf gebruiken (bewust gelijk in content.js,
+   background.js en app.js). Dezelfde bron die de pagina Settings → Usage zelf gebruikt:
+   /backend-api/wham/usage, met het toegangstoken uit de eigen sessie. Het token blijft in
+   het tabblad en wordt nergens opgeslagen. */
+function chatgptUsageInPageFetch() {
+    const getJson = (p, headers) => fetch(p, { credentials: "include", cache: "no-store", headers: headers || {} })
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status + " op " + p))));
+    const two = (n) => String(n).padStart(2, "0");
+    const clock = (ts) => { const d = new Date(ts); return two(d.getHours()) + ":" + two(d.getMinutes()); };
+    const day = (ts) => { const d = new Date(ts); return d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" }) + " " + d.getFullYear() + " " + clock(ts); };
+    return getJson("/api/auth/session")
+        .then((s) => {
+            if (!s || !s.accessToken) throw new Error("niet ingelogd op chatgpt.com");
+            const headers = { Authorization: "Bearer " + s.accessToken };
+            if (s.account && s.account.id) headers["ChatGPT-Account-Id"] = s.account.id;
+            return getJson("/backend-api/wham/usage", headers);
+        })
+        .then((u) => {
+            const rl = (u && u.rate_limit) || {};
+            const wins = [rl.primary_window, rl.secondary_window].filter(w => w && typeof w.used_percent === "number");
+            const secs = (w) => Number(w.limit_window_seconds) || 0;
+            // used_percent = percentage VERBRUIKT; het dashboard rekent in "over".
+            const left = (w) => Math.max(0, Math.min(100, Math.round(100 - w.used_percent)));
+            const resetTs = (w) => (w.reset_at ? w.reset_at * 1000
+                : (typeof w.reset_after_seconds === "number" ? Date.now() + w.reset_after_seconds * 1000 : NaN));
+            const five  = wins.find(w => secs(w) > 0 && secs(w) <= 6 * 3600);
+            const week  = wins.find(w => secs(w) > 6 * 3600 && secs(w) <= 8 * 86400);
+            const month = wins.find(w => secs(w) > 8 * 86400);
+            if (!five && !week && !month) throw new Error("geen bekende limietvensters in de respons");
+
+            let data = null;
+            if (five || week) {
+                const pct5h = five ? left(five) : null;
+                const pctWeekly = week ? left(week) : null;
+                const ts5h = five ? resetTs(five) : NaN;
+                const tsWeek = week ? resetTs(week) : NaN;
+                data = {
+                    pctRemaining5h: pct5h,
+                    pctRemainingWeekly: pctWeekly,
+                    // Exacte tijdstippen zijn leidend. De tekst ("Reset 15:23", "Reset 6 Oct 2026
+                    // 14:31") is voor dashboards van vóór 0.27.12, die alleen die vorm lezen.
+                    reset5hAbsoluteTs: isNaN(ts5h) ? undefined : ts5h,
+                    resetWeeklyAbsoluteTs: isNaN(tsWeek) ? undefined : tsWeek,
+                    reset5h: isNaN(ts5h) ? "" : "Reset " + clock(ts5h),
+                    resetWeekly: isNaN(tsWeek) ? "" : "Reset " + day(tsWeek),
+                    pctRemaining: pct5h !== null ? pct5h : pctWeekly,
+                    messagesUsed: pct5h !== null ? Math.round(((100 - pct5h) / 100) * 120) : 0,
+                    source: "api",
+                    summary: `Via API: 5u=${pct5h}% over, week=${pctWeekly}% over.`
+                };
+            }
+            let monthly = null;
+            if (month) {
+                const tsMonth = resetTs(month);
+                monthly = {
+                    pctRemainingMonthly: left(month),
+                    pctRemaining: left(month),
+                    resetMonthly: isNaN(tsMonth) ? "" : "Reset " + day(tsMonth),
+                    source: "api",
+                    summary: `Via API: ${left(month)}% maandlimiet over.`
+                };
+            }
+            return { ok: true, data, monthly };
+        })
+        .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
+}
+
+/* ChatGPT-limieten via ChatGPT's eigen API (v0.27.12), net als Claude sinds 0.27.0.
+   Werkt op élke chatgpt.com-pagina in ~1s, ongeacht hoe de usage-pagina eruitziet: in
+   okt. 2026 verhuisden de limieten naar een ander tabblad en vond de scraper niets meer.
+   De pagina uitlezen (scrapeChatGPTUsage) blijft het vangnet. */
+const CHATGPT_API_MIN_INTERVAL_MS = 60 * 1000;
+let _lastChatGPTApiFetch = 0;
+
+function fetchChatGPTUsageViaApi(force = false) {
+    const now = Date.now();
+    if (!force && now - _lastChatGPTApiFetch < CHATGPT_API_MIN_INTERVAL_MS) {
+        return Promise.resolve(false);   // recent genoeg gemeten
+    }
+    _lastChatGPTApiFetch = now;
+    return chatgptUsageInPageFetch().then((res) => {
+        if (!res.ok) throw new Error(res.error);
+        if (res.data) {
+            const account = detectChatGPTAccount();
+            safeSendMessage({
+                type: "SYNC_FROM_TAB",
+                provider: "chatgpt",
+                data: Object.assign({}, res.data, { account: account || undefined })
+            });
+            logSync(`[Scraper] ChatGPT usage via API: 5u=${res.data.pctRemaining5h}% over, week=${res.data.pctRemainingWeekly}% over`);
+        }
+        if (res.monthly) {
+            safeSendMessage({ type: "SYNC_FROM_TAB", provider: "codex", data: res.monthly });
+            logSync(`[Scraper] Codex maandlimiet via API: ${res.monthly.pctRemainingMonthly}% over`);
+        }
+        return true;
+    });
+}
+
+// Vangnet-scraper: "Resets in 2d 1h" / "Resets in 2h 45m" → absoluut tijdstip (ms), anders NaN.
+function chatgptRelativeResetTs(text) {
+    const m = (text || "").match(/\bin\s+(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?/i);
+    if (!m || !(m[1] || m[2] || m[3])) return NaN;
+    return Date.now() + ((parseInt(m[1] || 0) * 24 + parseInt(m[2] || 0)) * 60 + parseInt(m[3] || 0)) * 60000;
 }
 
 function formatMsAsShort(ms) {
@@ -956,6 +1078,8 @@ function scrapeChatGPTUsage() {
         if (pct5h !== null || pctWeekly !== null) {
             const account = detectChatGPTAccount();
             logSync(`[Scraper] ChatGPT data succesvol uitgelezen: 5h=${pct5h}%, Account="${account}"`);
+            const ts5h = chatgptRelativeResetTs(reset5hText);
+            const tsWeek = chatgptRelativeResetTs(resetWeeklyText);
 
             safeSendMessage({
                 type: "SYNC_FROM_TAB",
@@ -965,6 +1089,8 @@ function scrapeChatGPTUsage() {
                     pctRemainingWeekly: pctWeekly,
                     reset5h: reset5hText,
                     resetWeekly: resetWeeklyText,
+                    reset5hAbsoluteTs: isNaN(ts5h) ? undefined : ts5h,
+                    resetWeeklyAbsoluteTs: isNaN(tsWeek) ? undefined : tsWeek,
                     pctRemaining: pct5h !== null ? pct5h : pctWeekly,
                     messagesUsed: pct5h !== null ? Math.round(((100 - pct5h)/100) * 120) : 0,
                     account: account || undefined,

@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.11";
+const APP_VERSION = "0.27.12";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -1801,8 +1801,8 @@ function renderDashboardProgress() {
             gptPct = Math.max(0, sync.pctRemaining5h - newLogs.length);
             
             // Parse reset time (e.g. "Reset 13:54", "Reset 1:54 PM")
-            if (sync.reset5h) {
-                const five = parseChatgpt5hTime(sync.reset5h, now);
+            if (sync.reset5h || sync.reset5hAbsoluteTs) {
+                const five = chatgpt5hTime(sync, now);
                 if (five.timePct > 0) {
                     diffMsForPace = (five.timePct / 100) * (5 * 60 * 60 * 1000);
                     gptTimerText = five.timerText;
@@ -1875,8 +1875,8 @@ function renderDashboardProgress() {
 
     let weeklyTimePct = 0;
     let weeklyTimerText = "Fully Free";
-    if (state.syncStatus.chatgpt && state.syncStatus.chatgpt.resetWeekly) {
-        const wk = parseDateResetTime(state.syncStatus.chatgpt.resetWeekly, now, 7 * 24 * 60 * 60 * 1000);
+    if (state.syncStatus.chatgpt && (state.syncStatus.chatgpt.resetWeekly || state.syncStatus.chatgpt.resetWeeklyAbsoluteTs)) {
+        const wk = chatgptWeeklyTime(state.syncStatus.chatgpt, now);
         if (wk.timePct > 0) { weeklyTimePct = wk.timePct; weeklyTimerText = wk.timerText; }
     }
     
@@ -3121,6 +3121,74 @@ function claudeUsageInPageFetch() {
         .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }
 
+/* Draait IN een chatgpt.com-tabblad (v0.27.12). executeScript serialiseert alléén deze
+   functie, dus hij mag niets buiten zichzelf gebruiken (bewust gelijk in content.js,
+   background.js en app.js). Dezelfde bron die de pagina Settings → Usage zelf gebruikt:
+   /backend-api/wham/usage, met het toegangstoken uit de eigen sessie. Het token blijft in
+   het tabblad en wordt nergens opgeslagen. */
+function chatgptUsageInPageFetch() {
+    const getJson = (p, headers) => fetch(p, { credentials: "include", cache: "no-store", headers: headers || {} })
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status + " op " + p))));
+    const two = (n) => String(n).padStart(2, "0");
+    const clock = (ts) => { const d = new Date(ts); return two(d.getHours()) + ":" + two(d.getMinutes()); };
+    const day = (ts) => { const d = new Date(ts); return d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" }) + " " + d.getFullYear() + " " + clock(ts); };
+    return getJson("/api/auth/session")
+        .then((s) => {
+            if (!s || !s.accessToken) throw new Error("niet ingelogd op chatgpt.com");
+            const headers = { Authorization: "Bearer " + s.accessToken };
+            if (s.account && s.account.id) headers["ChatGPT-Account-Id"] = s.account.id;
+            return getJson("/backend-api/wham/usage", headers);
+        })
+        .then((u) => {
+            const rl = (u && u.rate_limit) || {};
+            const wins = [rl.primary_window, rl.secondary_window].filter(w => w && typeof w.used_percent === "number");
+            const secs = (w) => Number(w.limit_window_seconds) || 0;
+            // used_percent = percentage VERBRUIKT; het dashboard rekent in "over".
+            const left = (w) => Math.max(0, Math.min(100, Math.round(100 - w.used_percent)));
+            const resetTs = (w) => (w.reset_at ? w.reset_at * 1000
+                : (typeof w.reset_after_seconds === "number" ? Date.now() + w.reset_after_seconds * 1000 : NaN));
+            const five  = wins.find(w => secs(w) > 0 && secs(w) <= 6 * 3600);
+            const week  = wins.find(w => secs(w) > 6 * 3600 && secs(w) <= 8 * 86400);
+            const month = wins.find(w => secs(w) > 8 * 86400);
+            if (!five && !week && !month) throw new Error("geen bekende limietvensters in de respons");
+
+            let data = null;
+            if (five || week) {
+                const pct5h = five ? left(five) : null;
+                const pctWeekly = week ? left(week) : null;
+                const ts5h = five ? resetTs(five) : NaN;
+                const tsWeek = week ? resetTs(week) : NaN;
+                data = {
+                    pctRemaining5h: pct5h,
+                    pctRemainingWeekly: pctWeekly,
+                    // Exacte tijdstippen zijn leidend. De tekst ("Reset 15:23", "Reset 6 Oct 2026
+                    // 14:31") is voor dashboards van vóór 0.27.12, die alleen die vorm lezen.
+                    reset5hAbsoluteTs: isNaN(ts5h) ? undefined : ts5h,
+                    resetWeeklyAbsoluteTs: isNaN(tsWeek) ? undefined : tsWeek,
+                    reset5h: isNaN(ts5h) ? "" : "Reset " + clock(ts5h),
+                    resetWeekly: isNaN(tsWeek) ? "" : "Reset " + day(tsWeek),
+                    pctRemaining: pct5h !== null ? pct5h : pctWeekly,
+                    messagesUsed: pct5h !== null ? Math.round(((100 - pct5h) / 100) * 120) : 0,
+                    source: "api",
+                    summary: `Via API: 5u=${pct5h}% over, week=${pctWeekly}% over.`
+                };
+            }
+            let monthly = null;
+            if (month) {
+                const tsMonth = resetTs(month);
+                monthly = {
+                    pctRemainingMonthly: left(month),
+                    pctRemaining: left(month),
+                    resetMonthly: isNaN(tsMonth) ? "" : "Reset " + day(tsMonth),
+                    source: "api",
+                    summary: `Via API: ${left(month)}% maandlimiet over.`
+                };
+            }
+            return { ok: true, data, monthly };
+        })
+        .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
+}
+
 /* Zet de open claude.ai-tabs op volgorde van geschiktheid: eerst de usage-pagina (die
    mag desnoods herladen worden), dan het actieve tabblad, dan de rest. */
 function sortClaudeTabsByPreference(tabs) {
@@ -3133,7 +3201,7 @@ function sortClaudeTabsByPreference(tabs) {
 /* Stap 1 t/m 4 uit het blok hierboven. `hooks` bevat optionele UI-callbacks
    (onFast/onReload/onNewTab) zodat de dashboardknop een toast kan tonen en de
    achtergrond-poller stil kan blijven. */
-function refreshClaudeViaOpenTabs(tabs, fallbackUrl, hooks) {
+function refreshViaOpenTabs(provider, tabs, fallbackUrl, hooks) {
     const h = hooks || {};
     const ordered = sortClaudeTabsByPreference(tabs);
     if (!ordered.length) { if (h.onNewTab) h.onNewTab(); return; }
@@ -3160,15 +3228,24 @@ function refreshClaudeViaOpenTabs(tabs, fallbackUrl, hooks) {
         if (idx === 0) { if (injecting) return; injecting = true; }
         if (idx >= ordered.length || !chrome.scripting) { lastResort(); return; }
         chrome.scripting.executeScript(
-            { target: { tabId: ordered[idx].id }, func: claudeUsageInPageFetch },
+            { target: { tabId: ordered[idx].id }, func: provider === "chatgpt" ? chatgptUsageInPageFetch : claudeUsageInPageFetch },
             (results) => {
                 if (chrome.runtime.lastError) { void chrome.runtime.lastError; injectInto(idx + 1); return; }
                 const res = results && results[0] && results[0].result;
-                if (!res || !res.ok || !res.data) { injectInto(idx + 1); return; }
+                if (!res || !res.ok || !(res.data || res.monthly)) { injectInto(idx + 1); return; }
                 finish(h.onFast);
+                // Na elkaar versturen: de achtergrond doet per bericht lezen-wijzigen-schrijven.
+                const sendMonthly = () => {
+                    if (!res.monthly) return;
+                    chrome.runtime.sendMessage(
+                        { type: "SYNC_FROM_TAB", provider: "codex", data: res.monthly },
+                        () => { void chrome.runtime.lastError; }
+                    );
+                };
+                if (!res.data) { sendMonthly(); return; }
                 chrome.runtime.sendMessage(
-                    { type: "SYNC_FROM_TAB", provider: "claude", data: res.data },
-                    () => { void chrome.runtime.lastError; }
+                    { type: "SYNC_FROM_TAB", provider, data: res.data },
+                    () => { void chrome.runtime.lastError; sendMonthly(); }
                 );
             }
         );
@@ -3179,7 +3256,7 @@ function refreshClaudeViaOpenTabs(tabs, fallbackUrl, hooks) {
     const tryInjectAfterMessages = () => { if (!settled && pending <= 0) injectInto(0); };
 
     ordered.forEach((t) => {
-        chrome.tabs.sendMessage(t.id, { type: "REFRESH_NOW", provider: "claude" }, (resp) => {
+        chrome.tabs.sendMessage(t.id, { type: "REFRESH_NOW", provider }, (resp) => {
             void chrome.runtime.lastError;   // ongeldig/ontbrekend content script: negeren
             pending--;
             if (resp && resp.ok) { finish(h.onFast); return; }
@@ -3219,9 +3296,10 @@ function triggerSyncNow(provider) {
             if (chrome.runtime.lastError || !tabs) { void chrome.runtime.lastError; return; }
 
             // Claude: gebruik altijd een tabblad dat de gebruiker al open heeft staan.
-            if (provider === "claude" && tabs.length) {
-                refreshClaudeViaOpenTabs(tabs, url, {
-                    onFast: () => showToast(`<i class="fa-solid fa-bolt" style="color: var(--accent-green);"></i> Claude bijgewerkt via API.`),
+            // ChatGPT gaat sinds 0.27.12 dezelfde snelle weg (eigen usage-API).
+            if ((provider === "claude" || provider === "chatgpt") && tabs.length) {
+                refreshViaOpenTabs(provider, tabs, url, {
+                    onFast: () => showToast(`<i class="fa-solid fa-bolt" style="color: var(--accent-green);"></i> ${provider === "claude" ? "Claude" : "ChatGPT"} bijgewerkt via API.`),
                     onReload: () => showToast(`<i class="fa-solid fa-arrows-rotate fa-spin"></i> Tab found! Reloading the page in the background...`),
                     onNewTab: () => openBackgroundScrapeTab(url)
                 });
@@ -4209,6 +4287,17 @@ function parseChatgpt5hTime(reset5h, now) {
     return { timePct, timerText };
 }
 
+// ChatGPT: exacte tijdstippen uit de API (sinds 0.27.12) gaan voor; de tekst is het vangnet
+// voor oudere metingen. Zelfde weergave als Claude ("3h 9m", "1d 17u").
+function chatgpt5hTime(sync, now) {
+    if (sync && sync.reset5hAbsoluteTs) return parseClaudeSessionTime("", 5 * 60 * 60 * 1000, 0, sync.reset5hAbsoluteTs);
+    return parseChatgpt5hTime(sync && sync.reset5h, now);
+}
+function chatgptWeeklyTime(sync, now) {
+    if (sync && sync.resetWeeklyAbsoluteTs) return parseClaudeWeeklyTime("", now, sync.resetWeeklyAbsoluteTs);
+    return parseDateResetTime(sync && sync.resetWeekly, now, 7 * 24 * 60 * 60 * 1000);
+}
+
 // Datum-gebaseerde reset ("1 jul 2026 23:24") → timePct t.o.v. windowMs (week of maand).
 function parseDateResetTime(resetStr, now, windowMs) {
     let timePct = 0, timerText = (resetStr || "").replace(/^(?:resets?|herstelt)\s*/i, "").trim() || "—";
@@ -4261,11 +4350,11 @@ function computeProviderPace(provider, sync, now, monthlySync) {
     } else if (provider === "chatgpt") {
         // Betaald account: 5h + weekly. Gratis/personal: maandelijks. Toon wat aanwezig is.
         if (sync.pctRemaining5h !== undefined && sync.pctRemaining5h !== null) {
-            const five = parseChatgpt5hTime(sync.reset5h, now);
+            const five = chatgpt5hTime(sync, now);
             sections.push({ title: "5 Hour Limit (Pace)", capPct: sync.pctRemaining5h, timePct: five.timePct, resetLabel: `in <span class="font-mono">${escapeHtmlSafe(five.timerText)}</span>` });
         }
         if (sync.pctRemainingWeekly !== undefined && sync.pctRemainingWeekly !== null) {
-            const wk = parseDateResetTime(sync.resetWeekly, now, 7 * 24 * 60 * 60 * 1000);
+            const wk = chatgptWeeklyTime(sync, now);
             sections.push({ title: "Weekly Limit (Pace)", capPct: sync.pctRemainingWeekly, timePct: wk.timePct, resetLabel: `in <span class="font-mono">${escapeHtmlSafe(wk.timerText)}</span>` });
         }
         if (monthlySync && monthlySync.pctRemainingMonthly !== undefined && monthlySync.pctRemainingMonthly !== null) {
