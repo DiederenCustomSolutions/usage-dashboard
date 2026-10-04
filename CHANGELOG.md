@@ -4,6 +4,15 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.11] — 2026-10-04
+
+### Fixed
+- ChatGPT cards stopped updating: ChatGPT moved the plan limits (5-hour / weekly) to Settings → Usage, tab "Overview". The old analytics address now lands on the "Analytics" tab, which only has charts, so every refresh found 0 percentages. The extension now opens `chatgpt.com/settings/usage?tab=overview`, and a tab that is still on "Analytics" clicks through to "Overview" by itself.
+- The Overview page also has a "Weekly limits — % of limit used" history table (e.g. 39.5%). It was read as the current limit (100% left showed as 95%); that table is now skipped.
+- Reset text no longer ends in the percentage ("Resets in 7d 0h 100" → "Resets in 7d 0h").
+
+**Measured (Kevin's Chrome on agents-pc, live ChatGPT page):** tab on Analytics → switches to Overview → weekly 100% left, matching the page.
+
 ## [0.27.10] — 2026-10-02
 
 ### Fixed

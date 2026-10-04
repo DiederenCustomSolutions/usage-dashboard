@@ -18,7 +18,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js for Analytics (bundled locally — CDN blocked by MV3 CSP) -->
     <script src="lib/chart.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=0.27.10">
+    <link rel="stylesheet" href="style.css?v=0.27.11">
 </head>
 <body>
     <!-- Animated Ambient Background Blobs -->
@@ -158,7 +158,7 @@
                         <a href="https://claude.ai/settings/usage" target="_blank" class="sync-shortcut-icon claude" title="Claude Settings (Live sync)">
                             <img src="assets/anthropic-ai-badge.svg" alt="Anthropic AI">
                         </a>
-                        <a href="https://chatgpt.com/codex/cloud/settings/analytics#personal-usage" target="_blank" class="sync-shortcut-icon chatgpt" title="ChatGPT Settings (Live sync)">
+                        <a href="https://chatgpt.com/settings/usage?tab=overview" target="_blank" class="sync-shortcut-icon chatgpt" title="ChatGPT Settings (Live sync)">
                             <img src="assets/openai-badge.svg" alt="OpenAI">
                         </a>
                     </div>
@@ -237,7 +237,7 @@
                                     <a href="https://claude.ai/settings/usage" target="_blank" style="display:inline-flex; align-items:center; gap:6px; font-size:0.75rem; font-weight:600; color:var(--color-claude); background:rgba(242,140,40,0.12); border:1px solid rgba(242,140,40,0.3); padding:5px 12px; border-radius:20px; text-decoration:none;">
                                         <i class="fa-solid fa-arrow-up-right-from-square"></i> claude.ai/settings/usage
                                     </a>
-                                    <a href="https://chatgpt.com/codex/cloud/settings/analytics#personal-usage" target="_blank" style="display:inline-flex; align-items:center; gap:6px; font-size:0.75rem; font-weight:600; color:var(--color-chatgpt); background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); padding:5px 12px; border-radius:20px; text-decoration:none;">
+                                    <a href="https://chatgpt.com/settings/usage?tab=overview" target="_blank" style="display:inline-flex; align-items:center; gap:6px; font-size:0.75rem; font-weight:600; color:var(--color-chatgpt); background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); padding:5px 12px; border-radius:20px; text-decoration:none;">
                                         <i class="fa-solid fa-arrow-up-right-from-square"></i> chatgpt.com analytics
                                     </a>
                                 </div>
@@ -404,7 +404,7 @@
                                 <!-- Empty state: shown when not yet synced -->
                                 <div id="empty-state-chatgpt" style="display:none; margin:8px 0 4px; padding:8px 10px; background:rgba(16,185,129,0.07); border:1px solid rgba(16,185,129,0.2); border-radius:8px; font-size:0.75rem; color:rgba(255,255,255,0.6); line-height:1.5;">
                                     <i class="fa-solid fa-circle-info" style="color:var(--color-chatgpt); margin-right:5px;"></i>
-                                    Open <a href="https://chatgpt.com/codex/cloud/settings/analytics#personal-usage" target="_blank" style="color:var(--color-chatgpt); font-weight:600;">chatgpt.com analytics</a> to load your data.
+                                    Open <a href="https://chatgpt.com/settings/usage?tab=overview" target="_blank" style="color:var(--color-chatgpt); font-weight:600;">chatgpt.com usage</a> to load your data.
                                 </div>
 
                                 <!-- 5 Hour Limit Parallel Bars -->
@@ -830,7 +830,7 @@
                                         <strong>ChatGPT Business Scraper:</strong>
                                         <span id="settings-status-chatgpt" class="badge">Inactive</span>
                                     </div>
-                                    <p class="desc">Open <a href="https://chatgpt.com/codex/cloud/settings/analytics#personal-usage" target="_blank">chatgpt.com settings/analytics</a> to scan your usage chart.</p>
+                                    <p class="desc">Open <a href="https://chatgpt.com/settings/usage?tab=overview" target="_blank">chatgpt.com Settings → Usage</a> to read your limits.</p>
                                 </div>
 
                                 <div class="status-item-box mt-3">
@@ -1156,6 +1156,6 @@
     </div>
 
     <!-- Script Entry -->
-    <script src="app.js?v=0.27.10"></script>
+    <script src="app.js?v=0.27.11"></script>
 </body>
 </html>

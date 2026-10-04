@@ -943,7 +943,7 @@ function refreshClaudeViaOpenTabs(tabs, hooks) {
 function triggerScrapeFromBackground(provider, config, profileId, profileLabel) {
     const providerTargets = {
         claude: { queryPattern: "*://*.claude.ai/*", fallbackUrl: "https://claude.ai/settings/usage", matchPart: "settings/usage", name: "Claude.ai" },
-        chatgpt: { queryPattern: "*://*.chatgpt.com/*", fallbackUrl: "https://chatgpt.com/codex/cloud/settings/analytics#personal-usage", matchPart: "analytics", name: "ChatGPT" },
+        chatgpt: { queryPattern: "*://*.chatgpt.com/*", fallbackUrl: "https://chatgpt.com/settings/usage?tab=overview", matchPart: "settings/usage", name: "ChatGPT" },
         zai: { queryPattern: "*://z.ai/*", fallbackUrl: "https://z.ai/manage-apikey/coding-plan/personal/usage", matchPart: "coding-plan/personal/usage", name: "Z.Ai" }
     };
     const target = providerTargets[provider] || providerTargets.chatgpt;

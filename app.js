@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.10";
+const APP_VERSION = "0.27.11";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -13,6 +13,14 @@ const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1
 const DEFAULT_PWA_HOST = "https://diederencustomsolutions.github.io/usage-dashboard";
 const DEPLOY_VERSION_CHECK_URL = `${DEFAULT_PWA_HOST}/app.js`;
 const EXTENSION_ID = "dclbninbcejifmbadajdolibjcifmloc";
+
+// ChatGPT toont de plan-limieten (5-uur/wekelijks) sinds okt. 2026 op het tabblad
+// "Overview" van Settings → Usage; het oude analytics-adres stuurt door naar het
+// tabblad "Analytics", waar alleen grafieken staan.
+const CHATGPT_USAGE_URL = "https://chatgpt.com/settings/usage?tab=overview";
+function isChatGPTUsageUrl(url) {
+    return !!url && (url.includes("settings/usage") || url.includes("analytics"));
+}
 
 // Build info strip: toont versie, SW-cache, omgeving en (laatste 6 chars van) binId
 // zodat de gebruiker visueel kan verifiëren of PC en telefoon dezelfde bin gebruiken.
@@ -900,7 +908,7 @@ function addStaticHideButtons() {
 // "Blok toevoegen": opent de inlog/usage-pagina van een provider zodat het blok verschijnt.
 function getProviderLoginUrl(provider) {
     if (provider === "claude")  return "https://claude.ai/settings/usage";
-    if (provider === "chatgpt") return "https://chatgpt.com/codex/cloud/settings/analytics#usage";
+    if (provider === "chatgpt") return CHATGPT_USAGE_URL;
     if (provider === "gemini")  return "https://gemini.google.com/app";
     if (provider === "zai")     return "https://z.ai/manage-apikey/coding-plan/personal/usage";
     return null;
@@ -3200,7 +3208,7 @@ function openBackgroundScrapeTab(url) {
 function triggerSyncNow(provider) {
     const url = provider === "claude"
         ? "https://claude.ai/settings/usage"
-        : "https://chatgpt.com/codex/cloud/settings/analytics#personal-usage";
+        : CHATGPT_USAGE_URL;
 
     if (typeof chrome !== "undefined" && chrome.tabs) {
         // Query utilizing subdomains (*.claude.ai and *.chatgpt.com) to find open tabs
@@ -3221,7 +3229,7 @@ function triggerSyncNow(provider) {
             }
 
             // Find an existing tab on the settings/analytics page
-            const existingTab = tabs.find(t => t.url && t.url.includes(provider === "claude" ? "settings/usage" : "analytics"));
+            const existingTab = tabs.find(t => t.url && (provider === "claude" ? t.url.includes("settings/usage") : isChatGPTUsageUrl(t.url)));
 
             if (existingTab) {
                 showToast(`<i class="fa-solid fa-arrows-rotate fa-spin"></i> Tab found! Reloading the page in the background...`);

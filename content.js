@@ -301,8 +301,13 @@ function setupSettingsScraper() {
             triggerScrape();
         }
 
-        // Auto-select Personal Tab if on ChatGPT Analytics page
-        if (window.location.href.includes("chatgpt.com") && window.location.href.includes("analytics")) {
+        // ChatGPT Settings → Usage: de limieten staan op het tabblad "Overview".
+        if (window.location.href.includes("chatgpt.com") && window.location.href.includes("settings/usage")) {
+            if (document.readyState === "complete") {
+                autoSelectOverviewTab();
+            }
+        } else if (window.location.href.includes("chatgpt.com") && window.location.href.includes("analytics")) {
+            // Auto-select Personal Tab if on (oude) ChatGPT Analytics page
             if (document.readyState === "complete") {
                 autoSelectPersonalTab();
             }
@@ -392,6 +397,21 @@ function autoSelectPersonalTab() {
     }
 }
 
+// Sinds okt. 2026 staan de ChatGPT-limieten op Settings → Usage, tabblad "Overview".
+// Een tabblad dat op "Analytics" staat (oude bladwijzer, doorverwijzing) toont geen
+// percentages, dus klikken we één keer per adres op "Overview".
+let overviewTabClickedFor = null;
+function autoSelectOverviewTab() {
+    const url = window.location.href;
+    if (url.includes("tab=overview") || overviewTabClickedFor === url) return;
+    const tab = Array.from(document.querySelectorAll('button, a, [role="tab"]'))
+        .find(el => (el.innerText || "").trim().toLowerCase() === "overview");
+    if (!tab) return;
+    overviewTabClickedFor = url;
+    logSync("[Scraper] ChatGPT: tabblad 'Overview' openen (limieten staan daar).");
+    tab.click();
+}
+
 function triggerScrape() {
     const url = window.location.href;
     logSync("[Scraper] URL gedetecteerd: " + url);
@@ -409,7 +429,7 @@ function triggerScrape() {
                 observeAndScrapeStable(scrapeClaudeUsage, { settleMs: 900, maxMs: 9000 });
             }
         });
-    } else if (url.includes("chatgpt.com") && url.includes("analytics")) {
+    } else if (url.includes("chatgpt.com") && (url.includes("analytics") || url.includes("settings/usage"))) {
         logSync("[Scraper] ChatGPT analytics page gedetecteerd. Start scan...");
         observeAndScrape(scrapeChatGPTUsage, false); // Do not disconnect so it scrapes after tab clicks!
         // Codex maandelijkse gebruikslimiet staat op dezelfde analytics-pagina (apart blok).
@@ -811,6 +831,9 @@ function scrapeChatGPTUsage() {
         const limitCards = divs.filter(el => {
             const txt = el.innerText ? el.innerText.trim() : "";
             const lowerTxt = txt.toLowerCase();
+            // De Overview-pagina heeft ook een historietabel "Weekly limits — % of limit
+            // used" per periode (met decimalen als 39.5%); dat is geen actuele limiet.
+            if (lowerTxt.includes("of limit used") || lowerTxt.includes("period")) return false;
             return txt.length > 0 && txt.length < 350 && (
                 lowerTxt.includes("5 uur") ||
                 lowerTxt.includes("5-hour") ||
@@ -874,7 +897,7 @@ function scrapeChatGPTUsage() {
                         !(part1Lower.includes("resterend") || part1Lower.includes("remaining") || part1Lower.includes("over") || part1Lower.includes("left"))) {
                         pctRemaining = Math.max(0, 100 - val);
                     }
-                    const resetVal = resetMatch1 ? resetMatch1[0] : "";
+                    const resetVal = resetMatch1 ? resetMatch1[0].replace(/\s+\d+$/, "") : ""; // "Resets in 7d 0h 100% left" → zonder het percentage
                     if (isPart1_5h) {
                         pct5h = pctRemaining;
                         reset5hText = resetVal;
@@ -895,7 +918,7 @@ function scrapeChatGPTUsage() {
                         !(part2Lower.includes("resterend") || part2Lower.includes("remaining") || part2Lower.includes("over") || part2Lower.includes("left"))) {
                         pctRemaining = Math.max(0, 100 - val);
                     }
-                    const resetVal = resetMatch2 ? resetMatch2[0] : "";
+                    const resetVal = resetMatch2 ? resetMatch2[0].replace(/\s+\d+$/, "") : ""; // "Resets in 7d 0h 100% left" → zonder het percentage
                     if (isPart1_5h) {
                         pctWeekly = pctRemaining;
                         resetWeeklyText = resetVal;
@@ -916,7 +939,7 @@ function scrapeChatGPTUsage() {
                         !(lowerText.includes("resterend") || lowerText.includes("remaining") || lowerText.includes("over") || lowerText.includes("left"))) {
                         pctRemaining = Math.max(0, 100 - val);
                     }
-                    const resetVal = resetMatch ? resetMatch[0] : "";
+                    const resetVal = resetMatch ? resetMatch[0].replace(/\s+\d+$/, "") : ""; // "Resets in 7d 0h 100% left" → zonder het percentage
                     logSync(`[Scraper] Enkelvoudige kaart parse resultaat: pctRemaining=${pctRemaining}%, resetVal="${resetVal}"`);
                     
                     if (has5h) {
