@@ -837,7 +837,9 @@ function checkForRemoteRefreshRequestBG() {
             // Only measure providers this profile has ever delivered data for; opening hidden
             // tabs for services this profile is not logged in to cost 16-20s and an error.
             const user = (res.lt_users || {})[res.lt_current_user] || {};
-            const known = Object.keys(user.syncStatus || {}).filter(p => ["claude", "chatgpt", "zai"].includes(p));
+            // An empty entry (null) means this profile never got figures for that service (no
+            // subscription, e.g. Kevin has no Claude): measuring it only opens heavy pages and logs errors.
+            const known = Object.keys(user.syncStatus || {}).filter(p => ["claude", "chatgpt", "zai"].includes(p) && user.syncStatus[p]);
             // Providers switched off in Settings (shared dashboardConfig) are never measured.
             const off = (flags && flags.dashboardConfig && flags.dashboardConfig.providersOff) || {};
             const providers = (known.length ? known : ["claude", "chatgpt", "zai"]).filter(p => !off[p]);

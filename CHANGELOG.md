@@ -4,6 +4,27 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.27.16] — 2026-10-04
+
+### A refresh no longer measures services a profile has no subscription for
+
+- A refresh request measured every service that had an entry in the profile, also an empty one
+  (`null`: never any figures). Kevin has no Claude and Raimond no ChatGPT, so every refresh opened the
+  heavy Claude/ChatGPT page in their measuring Chrome for 16-20 s and ended in "No data received"
+  (red on the dashboard, noise in the log, ~150-250 MB extra memory each time). Now only services
+  that ever delivered figures are measured — as the comment in the code already said. A newly logged-in
+  service is picked up as soon as its page is opened once (the page measures itself).
+
+**Measured (agents-controller, live data):** Kevin and Kevin – LXDG-DCS would measure `chatgpt` only
+(was `chatgpt, claude`).
+
+**Also on 04-10, outside the code (agents-controller):** the measuring Chromes open tiny pages
+(`claude.ai/robots.txt`, `chatgpt.com/robots.txt`) instead of the heavy usage pages — the usage APIs
+work from any page of the site. Memory of the four measuring Chromes 2.7 GB → 1.5 GB, refresh as fast
+as before (1-2 s). Before each start the remembered window position and Chrome's service-worker
+storage are cleared, so they start without a Remote Desktop connection and always run the current
+background code.
+
 ## [0.27.15] — 2026-10-04
 
 ### Updates start on a trigger, never on a timer
