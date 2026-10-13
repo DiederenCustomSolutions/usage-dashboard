@@ -15,7 +15,7 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
   `GET /backend-api/wham/rate-limit-reset-credits` (found in the open-source Codex client,
   `codex-rs/backend-client`). Fetched in the same measurement, with the same in-tab token; a failure
   there never breaks the measurement. The fallback scraper keeps the last known resets.
-- **Tile order per device:** block menu → *Arrange tiles*. Drag tiles (pc) or use the arrows (phone:
+- **Tile order per device:** Dashboard ▾ → *Blocks: add, restore, arrange* (was "Add / restore blocks") → *Arrange tiles*. Drag tiles (pc) or use the arrows (phone:
   up/down). The order is stored in this browser only (`localStorage`), new tiles go to the end;
   *Reset order* goes back to the default.
 
