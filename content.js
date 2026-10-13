@@ -650,10 +650,11 @@ function chatgptUsageInPageFetch() {
     const two = (n) => String(n).padStart(2, "0");
     const clock = (ts) => { const d = new Date(ts); return two(d.getHours()) + ":" + two(d.getMinutes()); };
     const day = (ts) => { const d = new Date(ts); return d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" }) + " " + d.getFullYear() + " " + clock(ts); };
+    let headers = null;
     return getJson("/api/auth/session")
         .then((s) => {
             if (!s || !s.accessToken) throw new Error("niet ingelogd op chatgpt.com");
-            const headers = { Authorization: "Bearer " + s.accessToken };
+            headers = { Authorization: "Bearer " + s.accessToken };
             if (s.account && s.account.id) headers["ChatGPT-Account-Id"] = s.account.id;
             return getJson("/backend-api/wham/usage", headers);
         })
@@ -702,7 +703,27 @@ function chatgptUsageInPageFetch() {
                     summary: `Via API: ${left(month)}% maandlimiet over.`
                 };
             }
-            return { ok: true, data, monthly };
+            // Resets (v0.28.0): het aantal staat in wham/usage, de verloopdata in een aparte
+            // lijst (dezelfde die de Codex-app toont). Alleen lezen; mislukt dit, dan blijft de
+            // meting gewoon geldig.
+            const rc = u && u.rate_limit_reset_credits;
+            if (!data || !rc || typeof rc.available_count !== "number") return { ok: true, data, monthly };
+            const usableNow = typeof rc.applicable_available_count === "number" ? rc.applicable_available_count : null;
+            if (rc.available_count === 0) {
+                data.resetCredits = { count: 0, usableNow, items: [], checkedAt: Date.now() };
+                return { ok: true, data, monthly };
+            }
+            return getJson("/backend-api/wham/rate-limit-reset-credits", headers)
+                .then((list) => {
+                    const items = ((list && list.credits) || [])
+                        .filter(c => c && c.status === "available")
+                        .map(c => ({ title: c.title || "", expiresAt: c.expires_at ? Date.parse(c.expires_at) || null : null }))
+                        .sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
+                    data.resetCredits = { count: rc.available_count, usableNow, items, checkedAt: Date.now() };
+                }, () => {
+                    data.resetCredits = { count: rc.available_count, usableNow, items: null, checkedAt: Date.now() };
+                })
+                .then(() => ({ ok: true, data, monthly }));
         })
         .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }

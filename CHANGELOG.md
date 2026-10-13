@@ -4,6 +4,26 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.28.0] — 2026-10-13
+
+### ChatGPT limit resets on the tile, and your own tile order
+
+- **Resets:** a ChatGPT tile shows a small "3 resets" button next to "Last seen". Clicking it lists every
+  available reset with its expiry date (the same list the Codex app shows under Usage). Yellow when one
+  expires within 3 days. Read-only: resets are still used in Codex/ChatGPT itself.
+  Source: the count is in `wham/usage` (`rate_limit_reset_credits.available_count`), the expiry dates in
+  `GET /backend-api/wham/rate-limit-reset-credits` (found in the open-source Codex client,
+  `codex-rs/backend-client`). Fetched in the same measurement, with the same in-tab token; a failure
+  there never breaks the measurement. The fallback scraper keeps the last known resets.
+- **Tile order per device:** block menu → *Arrange tiles*. Drag tiles (pc) or use the arrows (phone:
+  up/down). The order is stored in this browser only (`localStorage`), new tiles go to the end;
+  *Reset order* goes back to the default.
+
+**Tested:** the new measurement code run in a real ChatGPT tab on agents-pc (3 resets, dates match the
+Codex app); popup, arrows, dragging and reload-keeps-order in the browser pane at pc and phone width.
+
+---
+
 ## [0.27.16] — 2026-10-04
 
 ### A refresh no longer measures services a profile has no subscription for

@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.27.16";
+const APP_VERSION = "0.28.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -1410,7 +1410,22 @@ function renderBlockFabMenu() {
         }).join("");
     }
 
+    const grid = document.getElementById("multi-profile-grid");
+    if (grid && grid.style.display !== "none" && grid.querySelector(".mp-card")) {
+        html += `<div class="fab-menu-section-title" style="margin-top:4px;"><i class="fa-solid fa-up-down-left-right"></i> Layout</div>
+        <button class="add-block-item" id="fab-arrange-tiles">
+            <span style="flex:1;text-align:left;">${tileArrangeMode ? "Done arranging" : "Arrange tiles"}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted);">this device</span>
+        </button>`;
+    }
+
     menu.innerHTML = html;
+
+    const arrangeBtn = menu.querySelector("#fab-arrange-tiles");
+    if (arrangeBtn) arrangeBtn.addEventListener("click", () => {
+        menu.style.display = "none";
+        setTileArrangeMode(!tileArrangeMode);
+    });
 
     menu.querySelectorAll(".add-block-item[data-add-provider]").forEach(b => {
         b.addEventListener("click", () => {
@@ -3500,10 +3515,11 @@ function chatgptUsageInPageFetch() {
     const two = (n) => String(n).padStart(2, "0");
     const clock = (ts) => { const d = new Date(ts); return two(d.getHours()) + ":" + two(d.getMinutes()); };
     const day = (ts) => { const d = new Date(ts); return d.getDate() + " " + d.toLocaleString("en-GB", { month: "short" }) + " " + d.getFullYear() + " " + clock(ts); };
+    let headers = null;
     return getJson("/api/auth/session")
         .then((s) => {
             if (!s || !s.accessToken) throw new Error("niet ingelogd op chatgpt.com");
-            const headers = { Authorization: "Bearer " + s.accessToken };
+            headers = { Authorization: "Bearer " + s.accessToken };
             if (s.account && s.account.id) headers["ChatGPT-Account-Id"] = s.account.id;
             return getJson("/backend-api/wham/usage", headers);
         })
@@ -3552,7 +3568,27 @@ function chatgptUsageInPageFetch() {
                     summary: `Via API: ${left(month)}% maandlimiet over.`
                 };
             }
-            return { ok: true, data, monthly };
+            // Resets (v0.28.0): het aantal staat in wham/usage, de verloopdata in een aparte
+            // lijst (dezelfde die de Codex-app toont). Alleen lezen; mislukt dit, dan blijft de
+            // meting gewoon geldig.
+            const rc = u && u.rate_limit_reset_credits;
+            if (!data || !rc || typeof rc.available_count !== "number") return { ok: true, data, monthly };
+            const usableNow = typeof rc.applicable_available_count === "number" ? rc.applicable_available_count : null;
+            if (rc.available_count === 0) {
+                data.resetCredits = { count: 0, usableNow, items: [], checkedAt: Date.now() };
+                return { ok: true, data, monthly };
+            }
+            return getJson("/backend-api/wham/rate-limit-reset-credits", headers)
+                .then((list) => {
+                    const items = ((list && list.credits) || [])
+                        .filter(c => c && c.status === "available")
+                        .map(c => ({ title: c.title || "", expiresAt: c.expires_at ? Date.parse(c.expires_at) || null : null }))
+                        .sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
+                    data.resetCredits = { count: rc.available_count, usableNow, items, checkedAt: Date.now() };
+                }, () => {
+                    data.resetCredits = { count: rc.available_count, usableNow, items: null, checkedAt: Date.now() };
+                })
+                .then(() => ({ ok: true, data, monthly }));
         })
         .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }
@@ -4811,7 +4847,7 @@ function buildSnapshotCard(provider, profile) {
         .join("");
 
     return `
-    <div class="glass-panel provider-card ${meta.cls}-card mp-card">
+    <div class="glass-panel provider-card ${meta.cls}-card mp-card" data-tile-key="${escapeHtmlSafe(tileKey(profile.id, provider))}">
         <button class="mp-hide" data-mp-pid="${profile.id}" data-mp-provider="${provider}" title="Remove this block from your dashboard">
             <i class="fa-solid fa-xmark"></i>
         </button>
@@ -4843,7 +4879,7 @@ function buildSnapshotCard(provider, profile) {
             </div>
         </div>
         <div class="card-stats">
-            <div class="sync-status-indicator mb-2"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${onlineSt.color};margin-right:5px;flex-shrink:0;"></span><span>${profile.isMe ? "Tab sync" : "Last seen"}: ${lastSynced}</span></div>
+            <div class="sync-status-indicator mb-2"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${onlineSt.color};margin-right:5px;flex-shrink:0;"></span><span>${profile.isMe ? "Tab sync" : "Last seen"}: ${lastSynced}</span>${provider === "chatgpt" ? resetCreditsHTML(profile.id, sync.resetCredits, now) : ""}</div>
             ${errorInfo}
             ${sectionsHTML}
         </div>
@@ -4853,6 +4889,179 @@ function buildSnapshotCard(provider, profile) {
 // Eenvoudige HTML-escape voor labels/resetteksten.
 function escapeHtmlSafe(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ======================================================================
+   CHATGPT-RESETS (v0.28.0)
+   Knop "3 resets" naast "Last seen"; klikken toont per reset de vervaldatum.
+   Data: syncStatus.chatgpt.resetCredits = { count, items: [{ title, expiresAt }] | null, checkedAt }.
+   Alleen tonen, nooit een reset gebruiken (dat doet de gebruiker in Codex/ChatGPT).
+   ====================================================================== */
+let openResetPopoverPid = null;
+
+function resetCreditsHTML(pid, rc, now) {
+    if (!rc || !(rc.count > 0)) return "";
+    const fmt = ts => new Date(ts).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const items = Array.isArray(rc.items) ? rc.items : [];
+    const soon = items.some(it => it.expiresAt && it.expiresAt - now < 3 * 86400000);
+    const rows = items.length
+        ? items.map(it => {
+            const days = it.expiresAt ? Math.max(0, Math.ceil((it.expiresAt - now) / 86400000)) : null;
+            const when = it.expiresAt
+                ? `Expires ${escapeHtmlSafe(fmt(it.expiresAt))} <span class="rc-days">(${days === 0 ? "today" : days + "d"})</span>`
+                : "No expiry date";
+            return `<li><span class="rc-name">${escapeHtmlSafe(it.title || "Full reset")}</span><span class="rc-when">${when}</span></li>`;
+        }).join("")
+        : `<li><span class="rc-name">Expiry dates not loaded yet</span><span class="rc-when">press refresh</span></li>`;
+    const label = rc.count + " reset" + (rc.count === 1 ? "" : "s");
+    return `<button type="button" class="reset-credits-btn${soon ? " soon" : ""}" data-rc-pid="${escapeHtmlSafe(pid)}" title="Show when these limit resets expire"><i class="fa-solid fa-rotate-left"></i> ${label}</button>
+        <div class="reset-credits-pop" data-rc-pop="${escapeHtmlSafe(pid)}" hidden>
+            <div class="rc-title">ChatGPT limit resets</div>
+            <ul>${rows}</ul>
+            <div class="rc-note">Use them in Codex or ChatGPT. Checked ${escapeHtmlSafe(rc.checkedAt ? formatTimeAgo(rc.checkedAt) : "—")}.</div>
+        </div>`;
+}
+
+function setResetPopover(pid) {
+    openResetPopoverPid = pid;
+    document.querySelectorAll(".reset-credits-pop").forEach(p => { p.hidden = p.getAttribute("data-rc-pop") !== pid; });
+}
+
+// Een herteken (nieuwe meting) vervangt de kaart; houd een open lijst open.
+function restoreOpenResetPopover() {
+    if (openResetPopoverPid) setResetPopover(openResetPopoverPid);
+}
+
+// Eén gedelegeerde handler: overleeft het hertekenen van de kaarten.
+document.addEventListener("click", (e) => {
+    const btn = e.target.closest && e.target.closest(".reset-credits-btn");
+    if (btn) {
+        e.stopPropagation();
+        const pid = btn.getAttribute("data-rc-pid");
+        setResetPopover(openResetPopoverPid === pid ? null : pid);
+        return;
+    }
+    if (openResetPopoverPid && !(e.target.closest && e.target.closest(".reset-credits-pop"))) setResetPopover(null);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openResetPopoverPid) setResetPopover(null); });
+
+/* ======================================================================
+   TEGELVOLGORDE (v0.28.0) — per apparaat, in localStorage (Rob: per apparaat is prima).
+   "Arrange tiles" in het blokmenu zet de schikmodus aan: slepen (pc) of pijltjes (telefoon).
+   ====================================================================== */
+const TILE_ORDER_KEY = "ud_tile_order";
+let tileArrangeMode = false;
+
+function tileKey(pid, provider) { return pid + "|" + provider; }
+
+function loadTileOrder() {
+    try { const v = JSON.parse(localStorage.getItem(TILE_ORDER_KEY) || "[]"); return Array.isArray(v) ? v : []; }
+    catch (e) { return []; }
+}
+
+function saveTileOrder(keys) {
+    try { localStorage.setItem(TILE_ORDER_KEY, JSON.stringify(keys)); } catch (e) { /* privévenster: dan alleen deze sessie */ }
+}
+
+// Bekende tegels in de bewaarde volgorde; nieuwe tegels daarachter in hun gewone volgorde.
+function sortTilesBySavedOrder(list) {
+    const order = loadTileOrder();
+    const pos = new Map(order.map((k, i) => [k, i]));
+    return list
+        .map((c, i) => ({ c, i }))
+        .sort((a, b) => {
+            const pa = pos.has(a.c.key) ? pos.get(a.c.key) : order.length + a.i;
+            const pb = pos.has(b.c.key) ? pos.get(b.c.key) : order.length + b.i;
+            return pa - pb;
+        })
+        .map(x => x.c);
+}
+
+function currentTileKeys(grid) {
+    return [...grid.querySelectorAll(".mp-card[data-tile-key]")].map(el => el.getAttribute("data-tile-key"));
+}
+
+// Bewaar de nieuwe volgorde zonder de volgorde van tegels die nu niet zichtbaar zijn kwijt te raken.
+function storeTileKeys(visibleKeys) {
+    const rest = loadTileOrder().filter(k => !visibleKeys.includes(k));
+    saveTileOrder(visibleKeys.concat(rest));
+}
+
+function moveTile(key, delta) {
+    const grid = document.getElementById("multi-profile-grid");
+    if (!grid) return;
+    const keys = currentTileKeys(grid);
+    const i = keys.indexOf(key), j = i + delta;
+    if (i < 0 || j < 0 || j >= keys.length) return;
+    keys.splice(j, 0, keys.splice(i, 1)[0]);
+    storeTileKeys(keys);
+    renderMultiProfileCards();
+}
+
+function setTileArrangeMode(on) {
+    tileArrangeMode = !!on;
+    renderMultiProfileCards();
+}
+
+function decorateTilesForArranging(grid) {
+    if (!tileArrangeMode) return;
+    const tiles = [...grid.querySelectorAll(".mp-card[data-tile-key]")];
+    if (!tiles.length) return;
+    const bar = document.createElement("div");
+    bar.className = "tile-arrange-bar";
+    bar.innerHTML = `<span><i class="fa-solid fa-up-down-left-right"></i> Drag the tiles or use the arrows. The order is saved on this device.</span>
+        <button type="button" class="tile-arrange-reset">Reset order</button>
+        <button type="button" class="tile-arrange-done">Done</button>`;
+    grid.insertBefore(bar, grid.firstChild);
+    bar.querySelector(".tile-arrange-done").addEventListener("click", () => setTileArrangeMode(false));
+    bar.querySelector(".tile-arrange-reset").addEventListener("click", () => { saveTileOrder([]); renderMultiProfileCards(); });
+
+    let dragKey = null;
+    tiles.forEach((tile, idx) => {
+        const key = tile.getAttribute("data-tile-key");
+        tile.classList.add("tile-arranging");
+        tile.setAttribute("draggable", "true");
+        const ctl = document.createElement("div");
+        ctl.className = "tile-move";
+        ctl.innerHTML = `<button type="button" data-dir="-1" title="Move earlier"${idx === 0 ? " disabled" : ""}><i class="fa-solid fa-arrow-left"></i></button>
+            <button type="button" data-dir="1" title="Move later"${idx === tiles.length - 1 ? " disabled" : ""}><i class="fa-solid fa-arrow-right"></i></button>`;
+        ctl.querySelectorAll("button").forEach(b => b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            moveTile(key, parseInt(b.getAttribute("data-dir"), 10));
+        }));
+        tile.appendChild(ctl);
+
+        tile.addEventListener("dragstart", (e) => {
+            dragKey = key;
+            tile.classList.add("tile-dragging");
+            try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", key); } catch (err) { /* oudere browsers */ }
+        });
+        tile.addEventListener("dragend", () => {
+            dragKey = null;
+            tile.classList.remove("tile-dragging");
+            grid.querySelectorAll(".tile-drop-target").forEach(t => t.classList.remove("tile-drop-target"));
+        });
+        tile.addEventListener("dragover", (e) => {
+            if (!dragKey || dragKey === key) return;
+            e.preventDefault();
+            tile.classList.add("tile-drop-target");
+        });
+        tile.addEventListener("dragleave", () => tile.classList.remove("tile-drop-target"));
+        tile.addEventListener("drop", (e) => {
+            e.preventDefault();
+            if (!dragKey || dragKey === key) return;
+            const keys = currentTileKeys(grid);
+            const from = keys.indexOf(dragKey);
+            keys.splice(from, 1);
+            // Rechterhelft van de doeltegel = erachter, linkerhelft = ervoor.
+            const rect = tile.getBoundingClientRect();
+            const after = e.clientX > rect.left + rect.width / 2;
+            const to = keys.indexOf(key) + (after ? 1 : 0);
+            keys.splice(to, 0, dragKey);
+            storeTileKeys(keys);
+            renderMultiProfileCards();
+        });
+    });
 }
 
 // Beslist tussen statische cards (1 profiel) en multi-grid (alle profielen),
@@ -4877,7 +5086,7 @@ function renderMultiProfileCards() {
     staticGrid.style.display = "none";
     multiGrid.style.display = "";
 
-    let cards = "";
+    const cardList = [];   // { key, html }
     const hiddenRestore = [];
     profiles.forEach(profile => {
         PROVIDER_ORDER.forEach(provider => {
@@ -4888,10 +5097,11 @@ function renderMultiProfileCards() {
                 hiddenRestore.push({ pid: profile.id, provider, label: profile.label });
                 return;
             }
-            cards += buildSnapshotCard(provider, profile);
+            cardList.push({ key: tileKey(profile.id, provider), html: buildSnapshotCard(provider, profile) });
         });
     });
 
+    let cards = sortTilesBySavedOrder(cardList).map(c => c.html).join("");
     if (!cards) {
         cards = `<div class="glass-panel" style="grid-column:1/-1; text-align:center; padding:30px; color:var(--text-muted);">
             <i class="fa-solid fa-circle-info" style="font-size:1.5rem; opacity:0.4;"></i>
@@ -4900,6 +5110,8 @@ function renderMultiProfileCards() {
     }
 
     multiGrid.innerHTML = cards;
+    decorateTilesForArranging(multiGrid);
+    restoreOpenResetPopover(multiGrid);
     renderBlockFabMenu();
 
     // Hide-knoppen
