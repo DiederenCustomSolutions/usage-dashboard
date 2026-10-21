@@ -24,3 +24,8 @@ yarn-error.log
 
 # Netlify lokale config (we deployen via Git, niet via CLI)
 .netlify/
+
+# Local measurement and Python caches (never publish session titles).
+usage-by-model.json
+__pycache__/
+/meetscripts/tmp*/

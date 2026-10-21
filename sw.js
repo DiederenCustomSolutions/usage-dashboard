@@ -1,5 +1,5 @@
-const CACHE_NAME = 'usagedashboard-cache-v0.28.0';
-const APP_BUILD = '0.28.0';
+const CACHE_NAME = 'usagedashboard-cache-v0.29.0';
+const APP_BUILD = '0.29.0';
 
 // Beantwoord versievragen vanuit de page (voor de Build info-strip)
 self.addEventListener('message', (event) => {
@@ -13,8 +13,8 @@ self.addEventListener('message', (event) => {
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=0.28.0',
-  './app.js?v=0.28.0',
+  './style.css?v=0.29.0',
+  './app.js?v=0.29.0',
   './lib/chart.min.js',
   './assets/usage-dashboard-logo.svg',
   './assets/openai-badge.svg',
@@ -59,6 +59,9 @@ function isAppShellRequest(request) {
 
 // Fetch Event
 self.addEventListener('fetch', (e) => {
+  // Measurements must never come from the app-shell cache or start a
+  // background revalidation. The page explicitly requests a fresh snapshot.
+  if (new URL(e.request.url).pathname.endsWith('/usage-by-model.json')) return;
   // Only intercept HTTP/S GET requests (skip chrome-extension:// schemes and POST requests)
   if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) {
     return;
