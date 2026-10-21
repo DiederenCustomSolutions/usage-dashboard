@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.28.0";
+const APP_VERSION = "0.29.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5016,6 +5016,8 @@ function renderUsageByModel() {
     tile.querySelectorAll("[data-um-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.umView === usageModelState.view)));
     const rows = tile.querySelector(".um-rows"), cache = tile.querySelector(".um-cache"), foot = tile.querySelector(".um-foot");
     cache.hidden = foot.hidden = !usageByModelData;
+    // Without a measurement on this host the tile has nothing to act on, so it stays hidden.
+    tile.style.display = usageByModelData ? "" : "none";
     if (!usageByModelData) { rows.innerHTML = '<span class="um-note">No data yet</span>'; return; }
     const measurement = usageByModelData.DATA[usageModelState.period];
     rows.innerHTML = "";
