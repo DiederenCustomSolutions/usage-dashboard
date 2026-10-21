@@ -59,6 +59,9 @@ function isAppShellRequest(request) {
 
 // Fetch Event
 self.addEventListener('fetch', (e) => {
+  // Measurements must never come from the app-shell cache or start a
+  // background revalidation. The page explicitly requests a fresh snapshot.
+  if (new URL(e.request.url).pathname.endsWith('/usage-by-model.json')) return;
   // Only intercept HTTP/S GET requests (skip chrome-extension:// schemes and POST requests)
   if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) {
     return;

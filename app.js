@@ -301,6 +301,7 @@ let usageChartInstance = null;
    ========================================================================== */
 document.addEventListener("DOMContentLoaded", () => {
     setupEventListeners();
+    initUsageByModel();
     initApp();
     initQRScanner();
     initGettingStartedBanner();
@@ -1410,7 +1411,7 @@ function renderBlockFabMenu() {
         }).join("");
     }
 
-    const grid = document.getElementById("multi-profile-grid");
+    const grid = activeTileGrid();
     if (grid && grid.style.display !== "none" && grid.querySelector(".mp-card")) {
         html += `<div class="fab-menu-section-title" style="margin-top:4px;"><i class="fa-solid fa-up-down-left-right"></i> Layout</div>
         <button class="add-block-item" id="fab-arrange-tiles">
@@ -2004,6 +2005,7 @@ function getNextWeeklyResetMs(dayName, timeStr) {
 
 function renderDashboardProgress() {
     const now = Date.now();
+    updateUsageCache(now); // Reuse the dashboard clock; no fetch and no new timer.
 
     // Profile filtering: gebruik syncStatus van geselecteerd profiel, anders geaggregeerd.
     // try/finally garandeert dat state.syncStatus altijd hersteld wordt, ook bij fouten.
@@ -4949,6 +4951,154 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openRese
    TEGELVOLGORDE (v0.28.0) — per apparaat, in localStorage (Rob: per apparaat is prima).
    "Arrange tiles" in het blokmenu zet de schikmodus aan: slepen (pc) of pijltjes (telefoon).
    ====================================================================== */
+// Usage measurement is read once on opening. Rendering and the existing clock
+// operate on this snapshot only; they never remeasure sessions or fetch data.
+let usageByModelData = null;
+const usageModelState = { period: "nacht", view: "model" };
+const usageModelColours = new Set(["opus", "sonnet", "haiku", "fable", "sol", "astra", "luna", "acc1", "acc2", "acc3", "main", "sub", "other"]);
+
+function validateUsageByModel(data) {
+    if (!data || !Number.isFinite(Date.parse(data.generated))) return false;
+    for (const period of ["nacht", "7d"]) {
+        for (const provider of ["claude", "gpt"]) {
+            for (const view of ["model", "wie"]) {
+                const rows = data.DATA?.[period]?.[provider]?.[view];
+                if (!Array.isArray(rows) || rows.length > 100 || !rows.every(row =>
+                    Array.isArray(row) && row.length === 4 && typeof row[0] === "string" &&
+                    usageModelColours.has(row[1]) && row.slice(2).every(n => Number.isFinite(n) && n >= 0))) return false;
+            }
+        }
+        const cold = data.KOUD?.[period];
+        if (!Array.isArray(cold) || cold.length !== 2 || !Number.isInteger(cold[0]) || cold[0] < 0 || !Number.isFinite(cold[1]) || cold[1] < 0) return false;
+    }
+    return Array.isArray(data.SESSIES) && data.SESSIES.length <= 100 && data.SESSIES.every(session =>
+        session && typeof session.name === "string" && Number.isFinite(Date.parse(session.lastTurn)));
+}
+
+async function initUsageByModel() {
+    const tile = document.getElementById("usage-by-model");
+    if (!tile) return;
+    try {
+        const saved = JSON.parse(localStorage.getItem("ud_usage_model") || "{}");
+        if (["nacht", "7d"].includes(saved.period)) usageModelState.period = saved.period;
+        if (["model", "wie"].includes(saved.view)) usageModelState.view = saved.view;
+    } catch (e) { /* Defaults also work without localStorage. */ }
+    tile.addEventListener("click", event => {
+        const button = event.target.closest("button[data-um-period], button[data-um-view]");
+        if (!button) { updateUsageCache(); return; }
+        if (button.dataset.umPeriod) usageModelState.period = button.dataset.umPeriod;
+        if (button.dataset.umView) usageModelState.view = button.dataset.umView;
+        try { localStorage.setItem("ud_usage_model", JSON.stringify(usageModelState)); } catch (e) {}
+        renderUsageByModel();
+    });
+    tile.addEventListener("pointerenter", () => updateUsageCache());
+    tile.addEventListener("focusin", () => updateUsageCache());
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") updateUsageCache();
+    });
+    try {
+        const response = await fetch("./usage-by-model.json", { cache: "no-store", credentials: "omit" });
+        if (!response.ok) throw new Error("No measurement");
+        const data = await response.json();
+        if (!validateUsageByModel(data)) throw new Error("Invalid measurement");
+        usageByModelData = data;
+    } catch (e) { usageByModelData = null; }
+    renderUsageByModel();
+}
+
+const usageFmt = n => n >= 1 ? n.toFixed(1) + " M" : Math.round(n * 1000) + " k";
+const usageFmtContext = n => n >= 1000 ? (n / 1000).toFixed(1) + " B" : (n >= 1 ? Math.round(n) + " M" : Math.round(n * 1000) + " k");
+
+function renderUsageByModel() {
+    const tile = document.getElementById("usage-by-model");
+    if (!tile) return;
+    tile.querySelectorAll("[data-um-period]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.umPeriod === usageModelState.period)));
+    tile.querySelectorAll("[data-um-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.umView === usageModelState.view)));
+    const rows = tile.querySelector(".um-rows"), cache = tile.querySelector(".um-cache"), foot = tile.querySelector(".um-foot");
+    cache.hidden = foot.hidden = !usageByModelData;
+    if (!usageByModelData) { rows.innerHTML = '<span class="um-note">No data yet</span>'; return; }
+    const measurement = usageByModelData.DATA[usageModelState.period];
+    rows.innerHTML = "";
+    for (const [provider, label] of [["claude", "Claude"], ["gpt", "ChatGPT"]]) {
+        const service = measurement[provider], values = service[usageModelState.view];
+        const total = values.reduce((sum, row) => sum + row[2], 0);
+        const row = document.createElement("div");
+        row.className = "um-row";
+        row.innerHTML = `<div class="um-who"><span class="um-dot um-${provider}"></span>${label}</div><div class="um-stack"></div><div class="um-tot">${usageFmt(total)} out</div><div class="um-legend"></div>`;
+        const stack = row.querySelector(".um-stack"), legend = row.querySelector(".um-legend");
+        values.forEach(([name, colour, output, context]) => {
+            const percent = total ? output / total * 100 : 0;
+            const segment = document.createElement("div");
+            segment.style.width = percent + "%";
+            segment.style.background = `var(--um-${colour})`;
+            if (percent >= 16) segment.textContent = name + " " + Math.round(percent) + "%";
+            else if (percent >= 7) segment.textContent = Math.round(percent) + "%";
+            segment.title = `${name} · ${Math.round(percent)}% · ${usageFmt(output)} out · ${usageFmtContext(context)} read`;
+            segment.setAttribute("aria-label", segment.title);
+            segment.tabIndex = 0;
+            stack.appendChild(segment);
+            if (percent < 16) {
+                const item = document.createElement("span"), swatch = document.createElement("i");
+                swatch.style.background = `var(--um-${colour})`;
+                item.append(swatch, name + " " + Math.round(percent) + "%");
+                legend.appendChild(item);
+            }
+        });
+        const share = (values, key) => {
+            const sum = values.reduce((n, r) => n + r[2], 0);
+            return sum ? Math.round((values.find(r => r[1] === key)?.[2] || 0) / sum * 100) : 0;
+        };
+        let warning = "";
+        if (provider === "claude") {
+            const percent = share(service.model, "opus");
+            if (percent > 60) warning = `Opus ${percent}% → move reading to Haiku`;
+        } else {
+            const top = [...service.wie].sort((a, b) => b[2] - a[2])[0];
+            const percent = top ? share(service.wie, top[1]) : 0;
+            if (percent > 50) warning = `${top[0]} ${percent}% → use smaller accounts first`;
+        }
+        const chip = document.createElement("div");
+        chip.className = "um-chip " + (warning ? "um-warn" : "um-ok");
+        chip.textContent = total ? (warning ? "⚠ " + warning : "✓ Balanced") : "No data yet";
+        row.appendChild(chip);
+        rows.appendChild(row);
+    }
+    cache.innerHTML = '<div class="um-who">Cache · 60 min</div>';
+    usageByModelData.SESSIES.forEach(session => {
+        const row = document.createElement("div");
+        row.className = "um-crow";
+        row.dataset.lastTurn = session.lastTurn;
+        row.innerHTML = '<span class="um-nm"></span><div class="um-ctrack"><div></div></div><span class="um-cst"></span>';
+        row.querySelector(".um-nm").textContent = session.name;
+        row.querySelector(".um-nm").title = session.name;
+        cache.appendChild(row);
+    });
+    if (!usageByModelData.SESSIES.length) cache.appendChild(Object.assign(document.createElement("span"), {className: "um-note", textContent: "No recent sessions"}));
+    const [count, rewritten] = usageByModelData.KOUD[usageModelState.period];
+    const chip = document.createElement("div");
+    chip.className = "um-chip um-cold-count " + (count > 20 ? "um-warn" : "um-ok");
+    chip.textContent = `${count > 20 ? "⚠" : "✓"} ${count} cold restart${count === 1 ? "" : "s"}` + (count > 20 ? ` · ${usageFmtContext(rewritten)} tokens rewritten` : "");
+    cache.appendChild(chip);
+    const format = value => new Date(value).toLocaleString([], {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"});
+    const window = usageByModelData.windows?.[usageModelState.period];
+    const validWindow = window && Number.isFinite(Date.parse(window.start)) && Number.isFinite(Date.parse(window.end));
+    tile.querySelector(".um-source").textContent = "Output tokens · " + (validWindow ? `${format(window.start)} – ${format(window.end)}` : (usageModelState.period === "nacht" ? "Last night" : "7 days"));
+    tile.querySelector(".um-generated").textContent = "Measured " + format(usageByModelData.generated);
+    updateUsageCache();
+}
+
+function updateUsageCache(now = Date.now()) {
+    document.querySelectorAll("#usage-by-model .um-crow").forEach(row => {
+        const minutes = Math.max(0, Math.min(60, 60 - (now - Date.parse(row.dataset.lastTurn)) / 60000));
+        const fill = row.querySelector(".um-ctrack div"), label = row.querySelector(".um-cst");
+        fill.style.width = minutes / 60 * 100 + "%";
+        fill.classList.toggle("um-low", minutes > 0 && minutes < 10);
+        label.textContent = minutes > 0 ? Math.ceil(minutes) + " min" : "cold";
+        label.classList.toggle("um-cold", minutes <= 0);
+        label.classList.toggle("um-low", minutes > 0 && minutes < 10);
+    });
+}
+
 const TILE_ORDER_KEY = "ud_tile_order";
 let tileArrangeMode = false;
 
@@ -4978,7 +5128,21 @@ function sortTilesBySavedOrder(list) {
 }
 
 function currentTileKeys(grid) {
-    return [...grid.querySelectorAll(".mp-card[data-tile-key]")].map(el => el.getAttribute("data-tile-key"));
+    return [...grid.querySelectorAll(".mp-card[data-tile-key]")].filter(el => el.style.display !== "none").map(el => el.getAttribute("data-tile-key"));
+}
+
+function activeTileGrid() {
+    const multi = document.getElementById("multi-profile-grid");
+    return multi && multi.style.display !== "none" ? multi : document.querySelector(".dashboard-grid:not(#multi-profile-grid)");
+}
+
+function clearTileArrangement(grid) {
+    grid.querySelectorAll(".tile-arrange-bar, .tile-move").forEach(el => el.remove());
+    grid.querySelectorAll(".mp-card").forEach(tile => {
+        if (tile._arrangeAbort) tile._arrangeAbort.abort();
+        tile.classList.remove("tile-arranging", "tile-dragging", "tile-drop-target");
+        tile.removeAttribute("draggable");
+    });
 }
 
 // Bewaar de nieuwe volgorde zonder de volgorde van tegels die nu niet zichtbaar zijn kwijt te raken.
@@ -4988,7 +5152,7 @@ function storeTileKeys(visibleKeys) {
 }
 
 function moveTile(key, delta) {
-    const grid = document.getElementById("multi-profile-grid");
+    const grid = activeTileGrid();
     if (!grid) return;
     const keys = currentTileKeys(grid);
     const i = keys.indexOf(key), j = i + delta;
@@ -5005,7 +5169,7 @@ function setTileArrangeMode(on) {
 
 function decorateTilesForArranging(grid) {
     if (!tileArrangeMode) return;
-    const tiles = [...grid.querySelectorAll(".mp-card[data-tile-key]")];
+    const tiles = [...grid.querySelectorAll(".mp-card[data-tile-key]")].filter(el => el.style.display !== "none");
     if (!tiles.length) return;
     const bar = document.createElement("div");
     bar.className = "tile-arrange-bar";
@@ -5018,6 +5182,9 @@ function decorateTilesForArranging(grid) {
 
     let dragKey = null;
     tiles.forEach((tile, idx) => {
+        const controller = new AbortController();
+        tile._arrangeAbort = controller;
+        const dragOptions = { signal: controller.signal };
         const key = tile.getAttribute("data-tile-key");
         tile.classList.add("tile-arranging");
         tile.setAttribute("draggable", "true");
@@ -5035,18 +5202,18 @@ function decorateTilesForArranging(grid) {
             dragKey = key;
             tile.classList.add("tile-dragging");
             try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", key); } catch (err) { /* oudere browsers */ }
-        });
+        }, dragOptions);
         tile.addEventListener("dragend", () => {
             dragKey = null;
             tile.classList.remove("tile-dragging");
             grid.querySelectorAll(".tile-drop-target").forEach(t => t.classList.remove("tile-drop-target"));
-        });
+        }, dragOptions);
         tile.addEventListener("dragover", (e) => {
             if (!dragKey || dragKey === key) return;
             e.preventDefault();
             tile.classList.add("tile-drop-target");
-        });
-        tile.addEventListener("dragleave", () => tile.classList.remove("tile-drop-target"));
+        }, dragOptions);
+        tile.addEventListener("dragleave", () => tile.classList.remove("tile-drop-target"), dragOptions);
         tile.addEventListener("drop", (e) => {
             e.preventDefault();
             if (!dragKey || dragKey === key) return;
@@ -5060,7 +5227,7 @@ function decorateTilesForArranging(grid) {
             keys.splice(to, 0, dragKey);
             storeTileKeys(keys);
             renderMultiProfileCards();
-        });
+        }, dragOptions);
     });
 }
 
@@ -5070,15 +5237,31 @@ function renderMultiProfileCards() {
     const multiGrid = document.getElementById("multi-profile-grid");
     const staticGrid = document.querySelector(".dashboard-grid:not(#multi-profile-grid)");
     if (!multiGrid || !staticGrid) return;
+    const usageTile = document.getElementById("usage-by-model");
+    clearTileArrangement(staticGrid);
+    clearTileArrangement(multiGrid);
 
     const profiles = getAllProfilesForGrid();
     const combined = (state.selectedProfileId === null) && profiles.length >= 2;
 
     if (!combined) {
+        // Keep the rich static cards and use the same arrange controls for them.
+        const pid = getCurrentProfileContext().profileId;
+        const tiles = PROVIDER_ORDER.map(provider => {
+            const card = document.getElementById("card-" + provider);
+            if (!card) return null;
+            card.classList.add("mp-card");
+            card.dataset.tileKey = tileKey(pid, provider);
+            return { key: card.dataset.tileKey, card };
+        }).filter(Boolean);
+        if (usageTile) tiles.push({ key: "usage-by-model", card: usageTile });
+        sortTilesBySavedOrder(tiles).forEach(item => staticGrid.appendChild(item.card));
         // Enkel profiel of maar één profiel: gebruik de bestaande rijke statische cards.
         multiGrid.style.display = "none";
         multiGrid.innerHTML = "";
         staticGrid.style.display = "";
+        decorateTilesForArranging(staticGrid);
+        renderBlockFabMenu();
         return;
     }
 
@@ -5101,6 +5284,7 @@ function renderMultiProfileCards() {
         });
     });
 
+    if (usageTile) cardList.push({ key: "usage-by-model", html: '<div data-usage-model-slot></div>' });
     let cards = sortTilesBySavedOrder(cardList).map(c => c.html).join("");
     if (!cards) {
         cards = `<div class="glass-panel" style="grid-column:1/-1; text-align:center; padding:30px; color:var(--text-muted);">
@@ -5110,6 +5294,8 @@ function renderMultiProfileCards() {
     }
 
     multiGrid.innerHTML = cards;
+    const usageSlot = multiGrid.querySelector("[data-usage-model-slot]");
+    if (usageSlot && usageTile) usageSlot.replaceWith(usageTile);
     decorateTilesForArranging(multiGrid);
     restoreOpenResetPopover(multiGrid);
     renderBlockFabMenu();

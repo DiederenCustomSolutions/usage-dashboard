@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.29.0] — 2026-10-21
+
+- Added **Usage by model** with Last night / 7 days and Model / Who views, local 60-minute cache bars, imbalance indicators and the existing Arrange tiles controls. A one-shot stdlib collector writes local totals to `usage-by-model.json`; an optional Stop hook records session timestamps without installing settings. Measurements bypass the service-worker cache and are excluded from Git. Bin transport remains separate.
+
 ## [0.28.0] — 2026-10-13
 
 ### ChatGPT limit resets on the tile, and your own tile order
