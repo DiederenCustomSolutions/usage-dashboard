@@ -63,6 +63,14 @@ body.mark .tag-new{display:block}
 .legend{grid-column:2/4;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted)}
 .legend span{display:inline-flex;gap:5px;align-items:center;font-variant-numeric:tabular-nums}
 .legend i{width:8px;height:8px;border-radius:2px;display:inline-block}
+.cache{display:grid;gap:8px;border-top:1px solid var(--line);padding-top:14px}
+.crow{display:grid;grid-template-columns:110px 1fr 72px;gap:14px;align-items:center;font-size:13px}
+.crow .nm{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctrack{height:8px;border-radius:4px;background:rgba(255,255,255,.05);overflow:hidden}
+.ctrack div{height:100%;border-radius:4px;background:var(--ok);transition:width .4s}
+.ctrack div.laag{background:var(--warn)}
+.cst{font-size:12px;text-align:right;white-space:nowrap;color:var(--ok);font-variant-numeric:tabular-nums}
+.cst.koud{color:var(--faint)}
 .chip{grid-column:2/4;justify-self:start;font-size:12.5px;border-radius:8px;padding:4px 10px}
 .chip.warn{color:var(--warn);background:var(--warn-bg)}
 .chip.ok{color:var(--ok);background:var(--ok-bg)}
@@ -72,14 +80,14 @@ body.mark .tag-new{display:block}
 .how{padding:14px 18px;display:grid;gap:8px}
 .how h3{font-size:14px;color:var(--muted)}
 .how ol{margin:0;padding-left:20px;display:grid;gap:4px;font-size:13px}
-@media (max-width:560px){ .row{grid-template-columns:1fr auto} .stack{grid-column:1/3;grid-row:2} .legend,.chip{grid-column:1/3} }
+@media (max-width:560px){ .crow{grid-template-columns:1fr 70px} .crow .ctrack{grid-column:1/3;grid-row:2} .row{grid-template-columns:1fr auto} .stack{grid-column:1/3;grid-row:2} .legend,.chip{grid-column:1/3} }
 @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
 </style>
 
 <div class="wrap">
   <div class="bar">
-    <b>Mockup · nieuwe tegel “Usage by model”</b>
-    <span class="note">Echte meting van 21-10 (sessie- en Codex-logs op de zbook)</span>
+    <b>Mockup · tegel “Usage by model”</b>
+    <span class="note">Gemeten 21-10</span>
     <label><input type="checkbox" id="mark" checked> Nieuw markeren</label>
   </div>
 
@@ -105,15 +113,16 @@ body.mark .tag-new{display:block}
       </div>
     </div>
     <div id="rows" style="display:grid;gap:18px"></div>
-    <div class="foot"><span id="bron">Output tokens · 20-10 23:30 – 21-10 08:00</span><span>Updated at each KLAAR · 06:23</span></div>
+    <div class="cache" id="cache"></div>
+    <div class="foot"><span id="bron">Output tokens · 20-10 23:30 – 21-10 08:00</span><span>Updated at each KLAAR</span></div>
   </section>
 
   <section class="panel how">
     <h3>Zo werkt het</h3>
     <ol>
-      <li>Bij elke KLAAR van een klus of nacht telt een script op de zbook de tokens per model, uit de sessie- en Codex-logs. Er draait geen timer.</li>
-      <li>Het stuurt alleen de totalen naar het dashboard, versleuteld in dezelfde opslag als nu.</li>
-      <li>De tegel toont de verdeling. Een gele melding verschijnt alleen als er iets scheef zit; anders staat er groen “Balanced”.</li>
+      <li>Na elke KLAAR: totalen per model uit de logs op de zbook.</li>
+      <li>Cache: na elke beurt het tijdstip per sessie (hook, geen timer). De balk telt af tot 60 min; daarna is de sessie koud en kost de volgende beurt de hele context opnieuw.</li>
+      <li>Geel alleen als iets scheef zit.</li>
     </ol>
   </section>
 </div>
@@ -137,10 +146,14 @@ const DATA = {
 };
 // Alleen een melding als er iets scheef zit (vensterregel: alleen tonen wat aandacht vraagt).
 const ATTENTIE = {
-  claude: (d, w) => { const s = aandeel(d.model,'opus'); return s > 60 ? ['warn', 'Opus does '+s+'% — move reading and waiting to Haiku'] : ['ok','Balanced']; },
+  claude: (d, w) => { const s = aandeel(d.model,'opus'); return s > 60 ? ['warn', 'Opus '+s+'% → move reading to Haiku'] : ['ok','Balanced']; },
   gpt:    (d, w) => { const s = Math.max(...d.wie.map(r => aandeel(d.wie, r[1]))); const top = d.wie.find(r => aandeel(d.wie, r[1]) === s);
-                      return s > 50 ? ['warn', top[0]+' does '+s+'% — use the smaller accounts first'] : ['ok','Balanced']; }
+                      return s > 50 ? ['warn', top[0]+' '+s+'% → use smaller accounts first'] : ['ok','Balanced']; }
 };
+// Cache: laatste beurt per sessie (minuten geleden bij openen) en koude starts (> 60 min stil, context opnieuw geschreven).
+const TTL = 60, T0 = Date.now();
+const SESSIES = [['Solidworks',2],['261020.1 Nacht bèta 1',19],['261019.2 Regie',452]];
+const KOUD = { nacht: [1, .07], '7d': [164, 22.5] };
 const NAAM = { claude: ['Claude','var(--claude)'], gpt: ['ChatGPT','var(--chatgpt)'] };
 const st = { periode: 'nacht', weergave: 'model' };
 try { const o = JSON.parse(localStorage.getItem('ud-mock-model') || '{}'); Object.assign(st, o); } catch(e) {}
@@ -159,15 +172,30 @@ function teken(){
     rijen.forEach(([naam,kleur,out,ctx]) => {
       const pct = out/tot*100, seg = document.createElement('div');
       seg.style.width = pct+'%'; seg.style.background = 'var(--'+kleur+')';
-      if (pct >= 9) seg.textContent = Math.round(pct)+'%';
+      if (pct >= 16) seg.textContent = naam+' '+Math.round(pct)+'%'; else if (pct >= 7) seg.textContent = Math.round(pct)+'%';
       seg.dataset.tip = naam+' · '+Math.round(pct)+'% · '+fmt(out)+' out · '+fmtCtx(ctx)+' read';
       stack.appendChild(seg);
-      const l = document.createElement('span'); l.innerHTML = '<i style="background:var(--'+kleur+')"></i>'; l.append(naam+' '+Math.round(pct)+'%'); leg.appendChild(l);
+      if (pct >= 16) return; const l = document.createElement('span'); l.innerHTML = '<i style="background:var(--'+kleur+')"></i>'; l.append(naam+' '+Math.round(pct)+'%'); leg.appendChild(l);
     });
     const [soort, tekst] = ATTENTIE[p](d, st.weergave);
     const c = document.createElement('div'); c.className = 'chip '+soort; c.textContent = (soort==='warn' ? '⚠ ' : '✓ ')+tekst; row.appendChild(c);
     rows.appendChild(row);
   }
+  const ca = document.getElementById('cache'); ca.textContent = '';
+  ca.appendChild(Object.assign(document.createElement('div'), {className:'who', textContent:'Cache · 60 min'}));
+  const mins = (Date.now()-T0)/60000;
+  SESSIES.forEach(([naam, geleden]) => {
+    const over = Math.max(0, TTL - geleden - mins), r = document.createElement('div'); r.className = 'crow';
+    r.innerHTML = '<span class="nm"></span><div class="ctrack"><div></div></div><span class="cst"></span>';
+    r.querySelector('.nm').textContent = naam; r.querySelector('.nm').title = naam;
+    const f = r.querySelector('.ctrack div'); f.style.width = (over/TTL*100)+'%'; if (over < 10) f.classList.add('laag');
+    const c = r.querySelector('.cst'); if (over > 0) c.textContent = Math.ceil(over)+' min'; else { c.textContent = 'cold'; c.classList.add('koud'); }
+    ca.appendChild(r);
+  });
+  const [n, m] = KOUD[st.periode], k = document.createElement('div');
+  k.className = 'chip '+(n > 20 ? 'warn' : 'ok'); k.style.gridColumn = '1/-1';
+  k.textContent = (n > 20 ? '⚠ ' : '✓ ')+n+' cold restart'+(n===1?'':'s')+(n > 20 ? ' · '+m+' M tokens rewritten' : '');
+  ca.appendChild(k);
   document.getElementById('bron').textContent = 'Output tokens · ' + (st.periode==='nacht' ? '20-10 23:30 – 21-10 08:00' : '14-10 – 21-10');
   for (const id of ['periode','weergave']) document.querySelectorAll('#'+id+' button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === st[id]));
   try { localStorage.setItem('ud-mock-model', JSON.stringify(st)); } catch(e) {}
@@ -182,4 +210,5 @@ const mark = document.getElementById('mark');
 mark.onchange = () => document.body.classList.toggle('mark', mark.checked);
 document.body.classList.add('mark');
 teken();
+setInterval(teken, 30000); // alleen het aftellen in beeld bijwerken; haalt niets op
 </script>
