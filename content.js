@@ -616,6 +616,18 @@ function fetchClaudeUsageViaApi(force = false) {
             const sessionTs = fh.resets_at ? Date.parse(fh.resets_at) : NaN;
             const weeklyTs  = sd.resets_at ? Date.parse(sd.resets_at) : NaN;
 
+            // Usage split (v0.30.0): claude.ai has no per-model split, only shares per surface
+            // for the current week and separate weekly limits for single models (e.g. Fable).
+            const surfaceNames = { claude_code: "Claude Code", chat: "Chats", cowork: "Cowork", other: "Other" };
+            const bd = u && u.seven_day_breakdown;
+            const usageBreakdown = bd && Array.isArray(bd.rows) ? {
+                rows: bd.rows.filter(r => r && typeof r.percent === "number").map(r => ({ name: surfaceNames[r.key] || r.display_name || r.key, pct: r.percent })),
+                since: Date.parse(bd.window_started_at) || null, checkedAt: Date.now()
+            } : undefined;
+            const scopedWeekly = (Array.isArray(u && u.limits) ? u.limits : [])
+                .filter(l => l && l.kind === "weekly_scoped" && l.scope && l.scope.model && typeof l.percent === "number")
+                .map(l => ({ name: l.scope.model.display_name || "Model", pctUsed: l.percent, resetsAt: Date.parse(l.resets_at) || null }));
+
             safeSendMessage({
                 type: "SYNC_FROM_TAB",
                 provider: "claude",
@@ -630,6 +642,8 @@ function fetchClaudeUsageViaApi(force = false) {
                     resetWeekly:  isNaN(weeklyTs)  ? "" : `Resets ${new Date(weeklyTs).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}`,
                     tokensUsed: pctSession !== null ? Math.round(((100 - pctSession) / 100) * 200000) : 0,
                     account: detectClaudeAccount() || undefined,
+                    usageBreakdown,
+                    scopedWeekly: scopedWeekly.length ? scopedWeekly : undefined,
                     source: "api",
                     summary: `Via API: Sessie=${pctSession}% over, Week=${pctWeekly}% over.`
                 }
@@ -707,22 +721,37 @@ function chatgptUsageInPageFetch() {
             // lijst (dezelfde die de Codex-app toont). Alleen lezen; mislukt dit, dan blijft de
             // meting gewoon geldig.
             const rc = u && u.rate_limit_reset_credits;
-            if (!data || !rc || typeof rc.available_count !== "number") return { ok: true, data, monthly };
-            const usableNow = typeof rc.applicable_available_count === "number" ? rc.applicable_available_count : null;
-            if (rc.available_count === 0) {
-                data.resetCredits = { count: 0, usableNow, items: [], checkedAt: Date.now() };
-                return { ok: true, data, monthly };
+            if (!data) return { ok: true, data, monthly };
+            let extra = Promise.resolve();
+            if (rc && typeof rc.available_count === "number") {
+                const usableNow = typeof rc.applicable_available_count === "number" ? rc.applicable_available_count : null;
+                if (rc.available_count === 0) data.resetCredits = { count: 0, usableNow, items: [], checkedAt: Date.now() };
+                else extra = getJson("/backend-api/wham/rate-limit-reset-credits", headers)
+                    .then((list) => {
+                        const items = ((list && list.credits) || [])
+                            .filter(c => c && c.status === "available")
+                            .map(c => ({ title: c.title || "", expiresAt: c.expires_at ? Date.parse(c.expires_at) || null : null }))
+                            .sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
+                        data.resetCredits = { count: rc.available_count, usableNow, items, checkedAt: Date.now() };
+                    }, () => {
+                        data.resetCredits = { count: rc.available_count, usableNow, items: null, checkedAt: Date.now() };
+                    });
             }
-            return getJson("/backend-api/wham/rate-limit-reset-credits", headers)
-                .then((list) => {
-                    const items = ((list && list.credits) || [])
-                        .filter(c => c && c.status === "available")
-                        .map(c => ({ title: c.title || "", expiresAt: c.expires_at ? Date.parse(c.expires_at) || null : null }))
-                        .sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
-                    data.resetCredits = { count: rc.available_count, usableNow, items, checkedAt: Date.now() };
-                }, () => {
-                    data.resetCredits = { count: rc.available_count, usableNow, items: null, checkedAt: Date.now() };
-                })
+            // Usage by model (v0.30.0): the same daily report the Codex app shows, per UTC day
+            // for the last 7 days. Values are shares of the limit ("percent"). Read only; a
+            // failure leaves the measurement valid.
+            const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+            const today = Date.now();
+            return extra
+                .then(() => getJson("/backend-api/wham/usage/daily-token-usage-breakdown?start_date=" + utcDay(today - 6 * 86400000) + "&end_date=" + utcDay(today) + "&group_by=day", headers))
+                .then((report) => {
+                    const days = ((report && report.data) || []).map((d) => {
+                        const models = {};
+                        (d.models || []).forEach((m) => { if (m && m.model && typeof m.credits === "number" && m.credits > 0) models[m.model] = Math.round(m.credits * 100) / 100; });
+                        return { date: d.date, models };
+                    }).filter(d => typeof d.date === "string");
+                    data.modelUsage = { days, units: (report && report.units) || "", checkedAt: Date.now() };
+                }, () => {})
                 .then(() => ({ ok: true, data, monthly }));
         })
         .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));

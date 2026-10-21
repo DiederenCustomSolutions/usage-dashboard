@@ -31,12 +31,7 @@ function check(labelText,code) {assert.equal(run(code),true,labelText);checks++;
 async function main() {
     context.sample=data;
     check('Real measurement validates','validateUsageByModel(sample)');
-    for (const mutation of [
-        'd.generated="invalid"', 'd.DATA.nacht.claude.model[0][2]=-1',
-        'd.DATA.nacht.claude.model[0][3]=Infinity', 'd.DATA.nacht.claude.model[0][1]="red);alert(1)"',
-        'd.KOUD.nacht[0]=1.2', 'd.SESSIES[0].lastTurn="invalid"',
-        'd.DATA["7d"].gpt.wie=null'
-    ]) check('Invalid schema rejected',`(()=>{const d=JSON.parse(JSON.stringify(sample));${mutation};return !validateUsageByModel(d)})()`);
+    for (const mutation of ['d.generated="invalid"', 'd.SESSIES[0].lastTurn="invalid"', 'd.SESSIES=null']) check('Invalid schema rejected',`(()=>{const d=JSON.parse(JSON.stringify(sample));${mutation};return !validateUsageByModel(d)})()`);
     context.testAt=at;
     check('Full cache at last turn','updateUsageCache(testAt); true');
     assert.equal(fill.style.width,'100%'); assert.equal(label.textContent,'60 min'); checks++;
@@ -51,16 +46,25 @@ async function main() {
     // Exercise the actual initialization and input event handlers, replacing
     // only rendering (which requires a real browser) with a counting sink.
     run('renderUsageByModel = countRender');
-    storage.set('ud_usage_model',JSON.stringify({period:'7d',view:'wie'}));
+    storage.set('ud_usage_model',JSON.stringify({period:'day'}));
     await run('initUsageByModel()');
     assert.equal(requests.length,1); assert.equal(requests[0].options.cache,'no-store'); checks++;
-    check('Preferences restored',"usageModelState.period==='7d' && usageModelState.view==='wie'");
-    tileEvents.click({target:{closest:()=>({dataset:{umPeriod:'nacht'}})}});
-    tileEvents.click({target:{closest:()=>({dataset:{umView:'model'}})}});
+    check('Preferences restored',"usageModelState.period==='day'");
+    tileEvents.click({target:{closest:()=>({dataset:{umPeriod:'day'}})}});
+    tileEvents.click({target:{closest:()=>({dataset:{umPeriod:'7d'}})}});
     tileEvents.pointerenter(); tileEvents.focusin(); documentEvents.visibilitychange();
     assert.equal(requests.length,1); assert.equal(renders,3); checks++;
-    check('Clicks update view',"usageModelState.period==='nacht' && usageModelState.view==='model'");
-    assert.equal(JSON.parse(storage.get('ud_usage_model')).view,'model');checks++;
+    check('Clicks update period',"usageModelState.period==='7d'");
+    assert.equal(JSON.parse(storage.get('ud_usage_model')).period,'7d');checks++;
+    // Per-person rows from the measured profiles (the online data path).
+    check('Model names readable',"usageModelLabel('gpt-6.1-sol').label==='Sol 6.1' && usageModelLabel('gpt-6-astra').colour==='astra' && usageModelLabel('x').colour==='other'");
+    run(`state={selectedProfileId:null}; getAllProfilesForGrid=()=>[
+        {id:'a',label:'Rob',syncStatus:{chatgpt:{modelUsage:{checkedAt:1,days:[{date:'2026-10-20',models:{'gpt-6-sol':2}},{date:'2026-10-21',models:{'gpt-6-luna':1}},{date:'2026-10-22',models:{}}]}},
+            claude:{usageBreakdown:{checkedAt:2,rows:[{name:'Claude Code',pct:100},{name:'Chats',pct:0}]},scopedWeekly:[{name:'Fable',pctUsed:3}]}}},
+        {id:'b',label:'Kevin',syncStatus:{chatgpt:{pctRemaining:50}}}]`);
+    check('Rows per person, 7 days',"(()=>{usageModelState.period='7d';const r=usageRowsFromProfiles();return r.rows.length===2&&r.rows[0].segments.length===2&&r.rows[1].segments.length===1&&r.rows[1].extra[0]==='Fable limit 3% used'&&r.measuredAt===2})()");
+    check('Last day uses the latest day with usage',"(()=>{usageModelState.period='day';const r=usageRowsFromProfiles();return r.rows[0].segments.length===1&&r.rows[0].segments[0].label==='Luna 6'})()");
+    check('Selected profile filters rows',"(()=>{state.selectedProfileId='b';return usageRowsFromProfiles().rows.length===0})()");
     context.fetch=async()=>({ok:false});
     await run('initUsageByModel()');
     check('Missing JSON clears snapshot','usageByModelData===null');

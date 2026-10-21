@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.29.0";
+const APP_VERSION = "0.30.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -3491,6 +3491,18 @@ function claudeUsageInPageFetch() {
             if (pctSession === null && pctWeekly === null) throw new Error("geen utilization-velden");
             const sTs = fh.resets_at ? Date.parse(fh.resets_at) : NaN;
             const wTs = sd.resets_at ? Date.parse(sd.resets_at) : NaN;
+
+            // Usage split (v0.30.0): claude.ai has no per-model split, only shares per surface
+            // for the current week and separate weekly limits for single models (e.g. Fable).
+            const surfaceNames = { claude_code: "Claude Code", chat: "Chats", cowork: "Cowork", other: "Other" };
+            const bd = u && u.seven_day_breakdown;
+            const usageBreakdown = bd && Array.isArray(bd.rows) ? {
+                rows: bd.rows.filter(r => r && typeof r.percent === "number").map(r => ({ name: surfaceNames[r.key] || r.display_name || r.key, pct: r.percent })),
+                since: Date.parse(bd.window_started_at) || null, checkedAt: Date.now()
+            } : undefined;
+            const scopedWeekly = (Array.isArray(u && u.limits) ? u.limits : [])
+                .filter(l => l && l.kind === "weekly_scoped" && l.scope && l.scope.model && typeof l.percent === "number")
+                .map(l => ({ name: l.scope.model.display_name || "Model", pctUsed: l.percent, resetsAt: Date.parse(l.resets_at) || null }));
             return { ok: true, data: {
                 pctRemaining: pctSession !== null ? pctSession : 100,
                 pctRemainingWeekly: pctWeekly,
@@ -3499,6 +3511,8 @@ function claudeUsageInPageFetch() {
                 resetSession: isNaN(sTs) ? "" : "Resets in " + short(sTs - Date.now()),
                 resetWeekly:  isNaN(wTs) ? "" : "Resets " + new Date(wTs).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" }),
                 tokensUsed: pctSession !== null ? Math.round(((100 - pctSession) / 100) * 200000) : 0,
+                usageBreakdown,
+                scopedWeekly: scopedWeekly.length ? scopedWeekly : undefined,
                 source: "api",
                 summary: `Via API: Sessie=${pctSession}% over, Week=${pctWeekly}% over.`
             }};
@@ -3574,22 +3588,37 @@ function chatgptUsageInPageFetch() {
             // lijst (dezelfde die de Codex-app toont). Alleen lezen; mislukt dit, dan blijft de
             // meting gewoon geldig.
             const rc = u && u.rate_limit_reset_credits;
-            if (!data || !rc || typeof rc.available_count !== "number") return { ok: true, data, monthly };
-            const usableNow = typeof rc.applicable_available_count === "number" ? rc.applicable_available_count : null;
-            if (rc.available_count === 0) {
-                data.resetCredits = { count: 0, usableNow, items: [], checkedAt: Date.now() };
-                return { ok: true, data, monthly };
+            if (!data) return { ok: true, data, monthly };
+            let extra = Promise.resolve();
+            if (rc && typeof rc.available_count === "number") {
+                const usableNow = typeof rc.applicable_available_count === "number" ? rc.applicable_available_count : null;
+                if (rc.available_count === 0) data.resetCredits = { count: 0, usableNow, items: [], checkedAt: Date.now() };
+                else extra = getJson("/backend-api/wham/rate-limit-reset-credits", headers)
+                    .then((list) => {
+                        const items = ((list && list.credits) || [])
+                            .filter(c => c && c.status === "available")
+                            .map(c => ({ title: c.title || "", expiresAt: c.expires_at ? Date.parse(c.expires_at) || null : null }))
+                            .sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
+                        data.resetCredits = { count: rc.available_count, usableNow, items, checkedAt: Date.now() };
+                    }, () => {
+                        data.resetCredits = { count: rc.available_count, usableNow, items: null, checkedAt: Date.now() };
+                    });
             }
-            return getJson("/backend-api/wham/rate-limit-reset-credits", headers)
-                .then((list) => {
-                    const items = ((list && list.credits) || [])
-                        .filter(c => c && c.status === "available")
-                        .map(c => ({ title: c.title || "", expiresAt: c.expires_at ? Date.parse(c.expires_at) || null : null }))
-                        .sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
-                    data.resetCredits = { count: rc.available_count, usableNow, items, checkedAt: Date.now() };
-                }, () => {
-                    data.resetCredits = { count: rc.available_count, usableNow, items: null, checkedAt: Date.now() };
-                })
+            // Usage by model (v0.30.0): the same daily report the Codex app shows, per UTC day
+            // for the last 7 days. Values are shares of the limit ("percent"). Read only; a
+            // failure leaves the measurement valid.
+            const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+            const today = Date.now();
+            return extra
+                .then(() => getJson("/backend-api/wham/usage/daily-token-usage-breakdown?start_date=" + utcDay(today - 6 * 86400000) + "&end_date=" + utcDay(today) + "&group_by=day", headers))
+                .then((report) => {
+                    const days = ((report && report.data) || []).map((d) => {
+                        const models = {};
+                        (d.models || []).forEach((m) => { if (m && m.model && typeof m.credits === "number" && m.credits > 0) models[m.model] = Math.round(m.credits * 100) / 100; });
+                        return { date: d.date, models };
+                    }).filter(d => typeof d.date === "string");
+                    data.modelUsage = { days, units: (report && report.units) || "", checkedAt: Date.now() };
+                }, () => {})
                 .then(() => ({ ok: true, data, monthly }));
         })
         .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
@@ -4951,28 +4980,17 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openRese
    TEGELVOLGORDE (v0.28.0) — per apparaat, in localStorage (Rob: per apparaat is prima).
    "Arrange tiles" in het blokmenu zet de schikmodus aan: slepen (pc) of pijltjes (telefoon).
    ====================================================================== */
-// Usage measurement is read once on opening. Rendering and the existing clock
-// operate on this snapshot only; they never remeasure sessions or fetch data.
+// Usage by model (v0.30.0). The split comes from the measuring Chromes like every other
+// figure, per profile: ChatGPT per model per day, Claude per surface for the current week.
+// A local usage-by-model.json (meetscripts/collect.py) only adds the cache bars on this host.
+// Rendering never fetches or measures; it follows the existing renders and clock.
 let usageByModelData = null;
-const usageModelState = { period: "nacht", view: "model" };
+const usageModelState = { period: "7d" };
 const usageModelColours = new Set(["opus", "sonnet", "haiku", "fable", "sol", "astra", "luna", "acc1", "acc2", "acc3", "main", "sub", "other"]);
 
 function validateUsageByModel(data) {
-    if (!data || !Number.isFinite(Date.parse(data.generated))) return false;
-    for (const period of ["nacht", "7d"]) {
-        for (const provider of ["claude", "gpt"]) {
-            for (const view of ["model", "wie"]) {
-                const rows = data.DATA?.[period]?.[provider]?.[view];
-                if (!Array.isArray(rows) || rows.length > 100 || !rows.every(row =>
-                    Array.isArray(row) && row.length === 4 && typeof row[0] === "string" &&
-                    usageModelColours.has(row[1]) && row.slice(2).every(n => Number.isFinite(n) && n >= 0))) return false;
-            }
-        }
-        const cold = data.KOUD?.[period];
-        if (!Array.isArray(cold) || cold.length !== 2 || !Number.isInteger(cold[0]) || cold[0] < 0 || !Number.isFinite(cold[1]) || cold[1] < 0) return false;
-    }
-    return Array.isArray(data.SESSIES) && data.SESSIES.length <= 100 && data.SESSIES.every(session =>
-        session && typeof session.name === "string" && Number.isFinite(Date.parse(session.lastTurn)));
+    return !!data && Number.isFinite(Date.parse(data.generated)) && Array.isArray(data.SESSIES) && data.SESSIES.length <= 100 &&
+        data.SESSIES.every(session => session && typeof session.name === "string" && Number.isFinite(Date.parse(session.lastTurn)));
 }
 
 async function initUsageByModel() {
@@ -4980,14 +4998,12 @@ async function initUsageByModel() {
     if (!tile) return;
     try {
         const saved = JSON.parse(localStorage.getItem("ud_usage_model") || "{}");
-        if (["nacht", "7d"].includes(saved.period)) usageModelState.period = saved.period;
-        if (["model", "wie"].includes(saved.view)) usageModelState.view = saved.view;
+        if (["day", "7d"].includes(saved.period)) usageModelState.period = saved.period;
     } catch (e) { /* Defaults also work without localStorage. */ }
     tile.addEventListener("click", event => {
-        const button = event.target.closest("button[data-um-period], button[data-um-view]");
+        const button = event.target.closest("button[data-um-period]");
         if (!button) { updateUsageCache(); return; }
-        if (button.dataset.umPeriod) usageModelState.period = button.dataset.umPeriod;
-        if (button.dataset.umView) usageModelState.view = button.dataset.umView;
+        usageModelState.period = button.dataset.umPeriod;
         try { localStorage.setItem("ud_usage_model", JSON.stringify(usageModelState)); } catch (e) {}
         renderUsageByModel();
     });
@@ -5006,86 +5022,104 @@ async function initUsageByModel() {
     renderUsageByModel();
 }
 
-const usageFmt = n => n >= 1 ? n.toFixed(1) + " M" : Math.round(n * 1000) + " k";
-const usageFmtContext = n => n >= 1000 ? (n / 1000).toFixed(1) + " B" : (n >= 1 ? Math.round(n) + " M" : Math.round(n * 1000) + " k");
+// "gpt-6.1-sol" → { label: "Sol 6.1", colour: "sol" }; unknown names stay visible in grey.
+function usageModelLabel(model) {
+    const m = /^gpt-([\d.]+)-([a-z]+)$/i.exec(model || "");
+    if (!m) return { label: model || "Other", colour: "other" };
+    const name = m[2].toLowerCase();
+    return { label: name.charAt(0).toUpperCase() + name.slice(1) + " " + m[1], colour: usageModelColours.has(name) ? name : "other" };
+}
+
+const usageSurfaceColours = { "Claude Code": "opus", "Chats": "haiku", "Cowork": "sonnet" };
+
+function usageRowsFromProfiles() {
+    const rows = [];
+    let measuredAt = 0;
+    const profiles = getAllProfilesForGrid().filter(p => !state.selectedProfileId || p.id === state.selectedProfileId);
+    profiles.forEach(profile => {
+        const sync = profile.syncStatus || {};
+        const gpt = sync.chatgpt && sync.chatgpt.modelUsage;
+        if (gpt && Array.isArray(gpt.days) && gpt.days.length) {
+            // The report lags about a day, so "Last day" is the latest day that has usage.
+            const lastDate = gpt.days.filter(d => Object.keys(d.models || {}).length).map(d => d.date).sort().pop();
+            const days = usageModelState.period === "day" ? gpt.days.filter(d => d.date === lastDate) : gpt.days;
+            const sums = {};
+            days.forEach(d => Object.entries(d.models || {}).forEach(([model, value]) => { sums[model] = (sums[model] || 0) + value; }));
+            const segments = Object.entries(sums).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+                .map(([model, value]) => ({ ...usageModelLabel(model), value }));
+            rows.push({ provider: "gpt", who: profile.label, segments, period: usageModelState.period === "day" ? (lastDate ? new Date(lastDate + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "last day") : "7 days" });
+            measuredAt = Math.max(measuredAt, gpt.checkedAt || 0);
+        }
+        const claude = sync.claude && sync.claude.usageBreakdown;
+        if (claude && Array.isArray(claude.rows)) {
+            const segments = claude.rows.filter(r => r.pct > 0)
+                .map(r => ({ label: r.name, colour: usageSurfaceColours[r.name] || "other", value: r.pct }));
+            const extra = (sync.claude.scopedWeekly || []).map(l => `${l.name} limit ${Math.round(l.pctUsed)}% used`);
+            rows.push({ provider: "claude", who: profile.label, segments, period: "this week", extra });
+            measuredAt = Math.max(measuredAt, claude.checkedAt || 0);
+        }
+    });
+    return { rows, measuredAt };
+}
 
 function renderUsageByModel() {
     const tile = document.getElementById("usage-by-model");
     if (!tile) return;
     tile.querySelectorAll("[data-um-period]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.umPeriod === usageModelState.period)));
-    tile.querySelectorAll("[data-um-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.umView === usageModelState.view)));
-    const rows = tile.querySelector(".um-rows"), cache = tile.querySelector(".um-cache"), foot = tile.querySelector(".um-foot");
-    cache.hidden = foot.hidden = !usageByModelData;
-    // Without a measurement on this host the tile has nothing to act on, so it stays hidden.
-    tile.style.display = usageByModelData ? "" : "none";
-    if (!usageByModelData) { rows.innerHTML = '<span class="um-note">No data yet</span>'; return; }
-    const measurement = usageByModelData.DATA[usageModelState.period];
-    rows.innerHTML = "";
-    for (const [provider, label] of [["claude", "Claude"], ["gpt", "ChatGPT"]]) {
-        const service = measurement[provider], values = service[usageModelState.view];
-        const total = values.reduce((sum, row) => sum + row[2], 0);
+    const rowsEl = tile.querySelector(".um-rows"), cache = tile.querySelector(".um-cache"), foot = tile.querySelector(".um-foot");
+    const { rows, measuredAt } = usageRowsFromProfiles();
+    // Nothing measured for the shown profiles and no local cache data: the tile stays hidden.
+    tile.style.display = rows.length || usageByModelData ? "" : "none";
+    rowsEl.innerHTML = "";
+    rows.forEach(item => {
+        const total = item.segments.reduce((sum, s) => sum + s.value, 0);
         const row = document.createElement("div");
         row.className = "um-row";
-        row.innerHTML = `<div class="um-who"><span class="um-dot um-${provider}"></span>${label}</div><div class="um-stack"></div><div class="um-tot">${usageFmt(total)} out</div><div class="um-legend"></div>`;
+        row.innerHTML = `<div class="um-who"><span class="um-dot um-${item.provider}"></span><span></span></div><div class="um-stack"></div><div class="um-tot"></div><div class="um-legend"></div>`;
+        row.querySelector(".um-who span:last-child").textContent = item.who;
+        row.querySelector(".um-who").title = (item.provider === "gpt" ? "ChatGPT" : "Claude") + " · " + item.who;
+        row.querySelector(".um-tot").textContent = item.period;
         const stack = row.querySelector(".um-stack"), legend = row.querySelector(".um-legend");
-        values.forEach(([name, colour, output, context]) => {
-            const percent = total ? output / total * 100 : 0;
+        if (!total) stack.appendChild(Object.assign(document.createElement("span"), { className: "um-note", textContent: "No usage" }));
+        item.segments.forEach(({ label, colour, value }) => {
+            const percent = value / total * 100;
             const segment = document.createElement("div");
             segment.style.width = percent + "%";
             segment.style.background = `var(--um-${colour})`;
-            if (percent >= 16) segment.textContent = name + " " + Math.round(percent) + "%";
+            if (percent >= 16) segment.textContent = label + " " + Math.round(percent) + "%";
             else if (percent >= 7) segment.textContent = Math.round(percent) + "%";
-            segment.title = `${name} · ${Math.round(percent)}% · ${usageFmt(output)} out · ${usageFmtContext(context)} read`;
+            segment.title = `${label} · ${Math.round(percent)}%`;
             segment.setAttribute("aria-label", segment.title);
             segment.tabIndex = 0;
             stack.appendChild(segment);
             if (percent < 16) {
-                const item = document.createElement("span"), swatch = document.createElement("i");
+                const entry = document.createElement("span"), swatch = document.createElement("i");
                 swatch.style.background = `var(--um-${colour})`;
-                item.append(swatch, name + " " + Math.round(percent) + "%");
-                legend.appendChild(item);
+                entry.append(swatch, label + " " + Math.round(percent) + "%");
+                legend.appendChild(entry);
             }
         });
-        const share = (values, key) => {
-            const sum = values.reduce((n, r) => n + r[2], 0);
-            return sum ? Math.round((values.find(r => r[1] === key)?.[2] || 0) / sum * 100) : 0;
-        };
-        let warning = "";
-        if (provider === "claude") {
-            const percent = share(service.model, "opus");
-            if (percent > 60) warning = `Opus ${percent}% → move reading to Haiku`;
-        } else {
-            const top = [...service.wie].sort((a, b) => b[2] - a[2])[0];
-            const percent = top ? share(service.wie, top[1]) : 0;
-            if (percent > 50) warning = `${top[0]} ${percent}% → use smaller accounts first`;
-        }
-        const chip = document.createElement("div");
-        chip.className = "um-chip " + (warning ? "um-warn" : "um-ok");
-        chip.textContent = total ? (warning ? "⚠ " + warning : "✓ Balanced") : "No data yet";
-        row.appendChild(chip);
-        rows.appendChild(row);
-    }
-    cache.innerHTML = '<div class="um-who">Cache · 60 min</div>';
-    usageByModelData.SESSIES.forEach(session => {
-        const row = document.createElement("div");
-        row.className = "um-crow";
-        row.dataset.lastTurn = session.lastTurn;
-        row.innerHTML = '<span class="um-nm"></span><div class="um-ctrack"><div></div></div><span class="um-cst"></span>';
-        row.querySelector(".um-nm").textContent = session.name;
-        row.querySelector(".um-nm").title = session.name;
-        cache.appendChild(row);
+        (item.extra || []).forEach(text => legend.appendChild(Object.assign(document.createElement("span"), { textContent: text })));
+        rowsEl.appendChild(row);
     });
-    if (!usageByModelData.SESSIES.length) cache.appendChild(Object.assign(document.createElement("span"), {className: "um-note", textContent: "No recent sessions"}));
-    const [count, rewritten] = usageByModelData.KOUD[usageModelState.period];
-    const chip = document.createElement("div");
-    chip.className = "um-chip um-cold-count " + (count > 20 ? "um-warn" : "um-ok");
-    chip.textContent = `${count > 20 ? "⚠" : "✓"} ${count} cold restart${count === 1 ? "" : "s"}` + (count > 20 ? ` · ${usageFmtContext(rewritten)} tokens rewritten` : "");
-    cache.appendChild(chip);
-    const format = value => new Date(value).toLocaleString([], {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"});
-    const window = usageByModelData.windows?.[usageModelState.period];
-    const validWindow = window && Number.isFinite(Date.parse(window.start)) && Number.isFinite(Date.parse(window.end));
-    tile.querySelector(".um-source").textContent = "Output tokens · " + (validWindow ? `${format(window.start)} – ${format(window.end)}` : (usageModelState.period === "nacht" ? "Last night" : "7 days"));
-    tile.querySelector(".um-generated").textContent = "Measured " + format(usageByModelData.generated);
+    cache.hidden = !usageByModelData;
+    if (usageByModelData) {
+        cache.innerHTML = '<div class="um-who">Cache · 60 min</div>';
+        usageByModelData.SESSIES.forEach(session => {
+            const row = document.createElement("div");
+            row.className = "um-crow";
+            row.dataset.lastTurn = session.lastTurn;
+            row.innerHTML = '<span class="um-nm"></span><div class="um-ctrack"><div></div></div><span class="um-cst"></span>';
+            row.querySelector(".um-nm").textContent = session.name;
+            row.querySelector(".um-nm").title = session.name;
+            cache.appendChild(row);
+        });
+    }
+    foot.hidden = !measuredAt;
+    if (measuredAt) {
+        tile.querySelector(".um-source").textContent = "Share of usage per person";
+        tile.querySelector(".um-generated").textContent = "Measured " + new Date(measuredAt).toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
     updateUsageCache();
 }
 
@@ -5262,6 +5296,7 @@ function renderMultiProfileCards() {
         multiGrid.style.display = "none";
         multiGrid.innerHTML = "";
         staticGrid.style.display = "";
+        renderUsageByModel();
         decorateTilesForArranging(staticGrid);
         renderBlockFabMenu();
         return;
@@ -5298,6 +5333,7 @@ function renderMultiProfileCards() {
     multiGrid.innerHTML = cards;
     const usageSlot = multiGrid.querySelector("[data-usage-model-slot]");
     if (usageSlot && usageTile) usageSlot.replaceWith(usageTile);
+    renderUsageByModel();
     decorateTilesForArranging(multiGrid);
     restoreOpenResetPopover(multiGrid);
     renderBlockFabMenu();

@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.30.0] — 2026-10-21
+
+- **Usage by model now comes from the measuring Chromes, for everyone.** ChatGPT shows per person which models used the limit (Sol, Astra, Luna), for the last day with figures or the last 7 days. Claude shows per person how this week's usage splits over Claude Code, Chats and Cowork, plus a model's own weekly limit (such as Fable). claude.ai has no split per model. The tile only appears when there is something to show.
+
 ## [0.29.0] — 2026-10-21
 
 - Added **Usage by model** with Last night / 7 days and Model / Who views, local 60-minute cache bars, imbalance indicators and the existing Arrange tiles controls. A one-shot stdlib collector writes local totals to `usage-by-model.json`; an optional Stop hook records session timestamps without installing settings. Measurements bypass the service-worker cache and are excluded from Git. Bin transport remains separate.
