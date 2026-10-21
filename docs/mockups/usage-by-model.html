@@ -1,0 +1,185 @@
+<title>Usage by model</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Mockup van een nieuwe tegel in het bestaande Usage Dashboard (donker, glas). Eén thema, net als het dashboard zelf. */
+:root{
+  color-scheme:dark;
+  --bg:#0a0e17; --card:rgba(17,24,39,.72); --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.16);
+  --fg:#f3f4f6; --muted:#9ca3af; --faint:#6b7280;
+  --claude:hsl(30,80%,60%); --chatgpt:hsl(160,85%,45%);
+  --opus:hsl(24,85%,58%); --sonnet:hsl(38,80%,66%); --haiku:hsl(48,70%,78%); --fable:hsl(330,55%,68%);
+  --sol:hsl(160,75%,45%); --astra:hsl(190,70%,60%);
+  --acc1:hsl(160,60%,40%); --acc2:hsl(150,70%,58%); --acc3:hsl(175,55%,70%);
+  --main:hsl(24,85%,58%); --sub:hsl(48,70%,78%);
+  --warn:#f59e0b; --warn-bg:rgba(245,158,11,.1); --ok:#10b981; --ok-bg:rgba(16,185,129,.1);
+  --new:#fb923c;
+  --f-display:'Outfit',system-ui,sans-serif; --f-body:'Inter',system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--f-body);
+  padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:980px;margin:0 auto;display:grid;gap:16px}
+h1,h2,h3{font-family:var(--f-display);font-weight:600;margin:0;text-wrap:balance}
+.note{font-size:12.5px;color:var(--muted)}
+/* mockupbalk */
+.bar{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;
+  border:1px dashed var(--line2);border-radius:12px;padding:10px 14px}
+.bar b{font-family:var(--f-display);font-size:15px}
+.bar label{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted);cursor:pointer}
+/* dashboard */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.top h1{font-size:22px}
+.ver{font-size:12px;color:var(--faint);border:1px solid var(--line);border-radius:20px;padding:2px 9px}
+.tabs{display:flex;gap:4px}
+.tabs span{font-size:13px;padding:5px 12px;border-radius:20px;color:var(--muted)}
+.tabs span.on{background:rgba(255,255,255,.07);color:var(--fg)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:18px}
+.old{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
+.mini{padding:14px 16px;display:flex;gap:14px;align-items:center;opacity:.55}
+.mini svg{flex:none}
+.mini h3{font-size:15px}
+.mini .note{font-size:12px}
+/* nieuwe tegel */
+.tile{padding:18px 20px;display:grid;gap:16px;position:relative}
+body.mark .tile{border-color:var(--new);box-shadow:0 0 0 1px var(--new)}
+.tag-new{position:absolute;top:-10px;left:18px;background:var(--new);color:#1a1205;font:600 11px var(--f-display);letter-spacing:.06em;padding:2px 8px;border-radius:10px;display:none}
+body.mark .tag-new{display:block}
+.thead{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.thead h2{font-size:17px}
+.seg{display:inline-flex;background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:20px;padding:2px}
+.seg button{all:unset;cursor:pointer;font-size:12.5px;padding:4px 12px;border-radius:16px;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:rgba(255,255,255,.1);color:var(--fg)}
+.seg button:focus-visible{outline:2px solid var(--line2)}
+.ctrls{display:flex;gap:8px;flex-wrap:wrap}
+.row{display:grid;grid-template-columns:110px 1fr auto;gap:8px 14px;align-items:center}
+.who{display:flex;gap:8px;align-items:center;font-family:var(--f-display);font-weight:600}
+.dot{width:9px;height:9px;border-radius:50%}
+.stack{display:flex;height:26px;border-radius:7px;overflow:hidden;background:rgba(255,255,255,.04);min-width:0}
+.stack div{display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:600;color:#14100a;white-space:nowrap;overflow:hidden;cursor:default;transition:filter .15s}
+.stack div:hover{filter:brightness(1.15)}
+.tot{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;min-width:72px}
+.legend{grid-column:2/4;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;gap:5px;align-items:center;font-variant-numeric:tabular-nums}
+.legend i{width:8px;height:8px;border-radius:2px;display:inline-block}
+.chip{grid-column:2/4;justify-self:start;font-size:12.5px;border-radius:8px;padding:4px 10px}
+.chip.warn{color:var(--warn);background:var(--warn-bg)}
+.chip.ok{color:var(--ok);background:var(--ok-bg)}
+.foot{font-size:12px;color:var(--faint);border-top:1px solid var(--line);padding-top:10px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+#tip{position:fixed;pointer-events:none;background:#111827;border:1px solid var(--line2);border-radius:8px;padding:6px 9px;font-size:12px;font-variant-numeric:tabular-nums;z-index:5}
+/* hoe werkt het */
+.how{padding:14px 18px;display:grid;gap:8px}
+.how h3{font-size:14px;color:var(--muted)}
+.how ol{margin:0;padding-left:20px;display:grid;gap:4px;font-size:13px}
+@media (max-width:560px){ .row{grid-template-columns:1fr auto} .stack{grid-column:1/3;grid-row:2} .legend,.chip{grid-column:1/3} }
+@media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <b>Mockup · nieuwe tegel “Usage by model”</b>
+    <span class="note">Echte meting van 21-10 (sessie- en Codex-logs op de zbook)</span>
+    <label><input type="checkbox" id="mark" checked> Nieuw markeren</label>
+  </div>
+
+  <div class="top">
+    <div style="display:flex;gap:10px;align-items:center"><h1>Usage Dashboard</h1><span class="ver">0.29.0</span></div>
+    <div class="tabs"><span class="on">Dashboard</span><span>Analytics</span><span>Settings</span></div>
+  </div>
+
+  <div class="old">
+    <div class="panel mini"><svg width="46" height="46" viewBox="0 0 46 46"><circle cx="23" cy="23" r="19" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="5"/><circle cx="23" cy="23" r="19" fill="none" stroke="var(--claude)" stroke-width="5" stroke-dasharray="119.4" stroke-dashoffset="47" transform="rotate(-90 23 23)"/></svg>
+      <div><h3>Claude</h3><div class="note">bestaande kaart, ongewijzigd</div></div></div>
+    <div class="panel mini"><svg width="46" height="46" viewBox="0 0 46 46"><circle cx="23" cy="23" r="19" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="5"/><circle cx="23" cy="23" r="19" fill="none" stroke="var(--chatgpt)" stroke-width="5" stroke-dasharray="119.4" stroke-dashoffset="31" transform="rotate(-90 23 23)"/></svg>
+      <div><h3>ChatGPT</h3><div class="note">bestaande kaart, ongewijzigd</div></div></div>
+  </div>
+
+  <section class="panel tile" aria-labelledby="t-h">
+    <span class="tag-new">NIEUW</span>
+    <div class="thead">
+      <h2 id="t-h">Usage by model</h2>
+      <div class="ctrls">
+        <div class="seg" id="periode"><button type="button" data-v="nacht" aria-pressed="true">Last night</button><button type="button" data-v="7d" aria-pressed="false">7 days</button></div>
+        <div class="seg" id="weergave"><button type="button" data-v="model" aria-pressed="true">Model</button><button type="button" data-v="wie" aria-pressed="false">Who</button></div>
+      </div>
+    </div>
+    <div id="rows" style="display:grid;gap:18px"></div>
+    <div class="foot"><span id="bron">Output tokens · 20-10 23:30 – 21-10 08:00</span><span>Updated at each KLAAR · 06:23</span></div>
+  </section>
+
+  <section class="panel how">
+    <h3>Zo werkt het</h3>
+    <ol>
+      <li>Bij elke KLAAR van een klus of nacht telt een script op de zbook de tokens per model, uit de sessie- en Codex-logs. Er draait geen timer.</li>
+      <li>Het stuurt alleen de totalen naar het dashboard, versleuteld in dezelfde opslag als nu.</li>
+      <li>De tegel toont de verdeling. Een gele melding verschijnt alleen als er iets scheef zit; anders staat er groen “Balanced”.</li>
+    </ol>
+  </section>
+</div>
+<div id="tip" hidden></div>
+
+<script>
+// Gemeten 21-10-2026 (miljoen tokens). out = uitvoer, ctx = gelezen context.
+const DATA = {
+  nacht: {
+    claude: { model: [['Opus','opus',.58,301.5],['Sonnet','sonnet',.17,30.2],['Haiku','haiku',.18,11.1]],
+              wie:   [['Main sessions','main',.37,218.8],['Subagents','sub',.56,124.0]] },
+    gpt:    { model: [['Sol','sol',.67,167.5]],
+              wie:   [['account1','acc1',.28,70.5],['account2','acc2',.21,51.6],['account3','acc3',.18,45.4]] }
+  },
+  '7d': {
+    claude: { model: [['Opus','opus',42.69,14664.9],['Sonnet','sonnet',3.19,1528.5],['Haiku','haiku',2.31,249.1],['Fable','fable',.63,93.5]],
+              wie:   [['Main sessions','main',44.44,15387.4],['Subagents','sub',4.38,1148.6]] },
+    gpt:    { model: [['Sol','sol',6.69,1314.2],['Astra','astra',.11,12.6]],
+              wie:   [['account1','acc1',1.26,252.9],['account2','acc2',4.47,840.1],['account3','acc3',1.07,233.7]] }
+  }
+};
+// Alleen een melding als er iets scheef zit (vensterregel: alleen tonen wat aandacht vraagt).
+const ATTENTIE = {
+  claude: (d, w) => { const s = aandeel(d.model,'opus'); return s > 60 ? ['warn', 'Opus does '+s+'% — move reading and waiting to Haiku'] : ['ok','Balanced']; },
+  gpt:    (d, w) => { const s = Math.max(...d.wie.map(r => aandeel(d.wie, r[1]))); const top = d.wie.find(r => aandeel(d.wie, r[1]) === s);
+                      return s > 50 ? ['warn', top[0]+' does '+s+'% — use the smaller accounts first'] : ['ok','Balanced']; }
+};
+const NAAM = { claude: ['Claude','var(--claude)'], gpt: ['ChatGPT','var(--chatgpt)'] };
+const st = { periode: 'nacht', weergave: 'model' };
+try { const o = JSON.parse(localStorage.getItem('ud-mock-model') || '{}'); Object.assign(st, o); } catch(e) {}
+
+function aandeel(rijen, key){ const t = rijen.reduce((a,r)=>a+r[2],0); const r = rijen.find(x=>x[1]===key); return r ? Math.round(r[2]/t*100) : 0; }
+const fmt = v => v >= 1 ? v.toFixed(1)+' M' : Math.round(v*1000)+' k';
+const fmtCtx = v => v >= 1000 ? (v/1000).toFixed(1)+' B' : Math.round(v)+' M';
+
+function teken(){
+  const rows = document.getElementById('rows'); rows.textContent = '';
+  for (const p of ['claude','gpt']){
+    const d = DATA[st.periode][p], rijen = d[st.weergave], tot = rijen.reduce((a,r)=>a+r[2],0);
+    const row = document.createElement('div'); row.className = 'row';
+    row.innerHTML = '<div class="who"><span class="dot" style="background:'+NAAM[p][1]+'"></span>'+NAAM[p][0]+'</div><div class="stack"></div><div class="tot">'+fmt(tot)+' out</div><div class="legend"></div>';
+    const stack = row.querySelector('.stack'), leg = row.querySelector('.legend');
+    rijen.forEach(([naam,kleur,out,ctx]) => {
+      const pct = out/tot*100, seg = document.createElement('div');
+      seg.style.width = pct+'%'; seg.style.background = 'var(--'+kleur+')';
+      if (pct >= 9) seg.textContent = Math.round(pct)+'%';
+      seg.dataset.tip = naam+' · '+Math.round(pct)+'% · '+fmt(out)+' out · '+fmtCtx(ctx)+' read';
+      stack.appendChild(seg);
+      const l = document.createElement('span'); l.innerHTML = '<i style="background:var(--'+kleur+')"></i>'; l.append(naam+' '+Math.round(pct)+'%'); leg.appendChild(l);
+    });
+    const [soort, tekst] = ATTENTIE[p](d, st.weergave);
+    const c = document.createElement('div'); c.className = 'chip '+soort; c.textContent = (soort==='warn' ? '⚠ ' : '✓ ')+tekst; row.appendChild(c);
+    rows.appendChild(row);
+  }
+  document.getElementById('bron').textContent = 'Output tokens · ' + (st.periode==='nacht' ? '20-10 23:30 – 21-10 08:00' : '14-10 – 21-10');
+  for (const id of ['periode','weergave']) document.querySelectorAll('#'+id+' button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === st[id]));
+  try { localStorage.setItem('ud-mock-model', JSON.stringify(st)); } catch(e) {}
+}
+for (const id of ['periode','weergave'])
+  document.getElementById(id).addEventListener('click', e => { const b = e.target.closest('button'); if (b){ st[id] = b.dataset.v; teken(); } });
+const tip = document.getElementById('tip');
+document.addEventListener('mousemove', e => { const t = e.target.dataset && e.target.dataset.tip;
+  if (!t){ tip.hidden = true; return; } tip.textContent = t; tip.hidden = false;
+  tip.style.left = Math.min(e.clientX+12, innerWidth-tip.offsetWidth-8)+'px'; tip.style.top = (e.clientY+14)+'px'; });
+const mark = document.getElementById('mark');
+mark.onchange = () => document.body.classList.toggle('mark', mark.checked);
+document.body.classList.add('mark');
+teken();
+</script>
