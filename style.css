@@ -2955,6 +2955,66 @@ body.auth-view .app-container {
 .reset-credits-pop .rc-note { font-size: 0.68rem; color: var(--text-muted); margin-top: 6px; }
 
 /* ===== Tegels schikken (v0.28.0) ===== */
+/* Usage by model: scoped mockup styling, inside the existing glass card/grid. */
+.usage-model {
+    --um-fg:#f3f4f6; --um-muted:#9ca3af; --um-faint:#6b7280;
+    --um-line:rgba(255,255,255,.08); --um-line2:rgba(255,255,255,.16);
+    --um-opus:hsl(24,85%,58%); --um-sonnet:hsl(38,80%,66%);
+    --um-haiku:hsl(48,70%,78%); --um-fable:hsl(330,55%,68%);
+    --um-sol:hsl(160,75%,45%); --um-astra:hsl(190,70%,60%); --um-luna:hsl(210,70%,70%);
+    --um-acc1:hsl(160,60%,40%); --um-acc2:hsl(150,70%,58%); --um-acc3:hsl(175,55%,70%);
+    --um-main:hsl(24,85%,58%); --um-sub:hsl(48,70%,78%); --um-other:#9ca3af;
+    --um-ok:#10b981; --um-warn:#f59e0b;
+    padding:18px 20px; display:grid; gap:16px; position:relative; grid-column:1/-1;
+    border:1px solid var(--um-line); border-radius:18px; background:rgba(17,24,39,.72);
+    color:var(--um-fg); font:14px/1.5 'Inter',system-ui,sans-serif; min-width:0;
+}
+.um-thead {display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.um-thead h2 {font:600 17px 'Outfit',system-ui,sans-serif;margin:0}
+.um-ctrls {display:flex;gap:8px;flex-wrap:wrap}
+.um-seg {display:inline-flex;background:rgba(0,0,0,.3);border:1px solid var(--um-line);border-radius:20px;padding:2px}
+.um-seg button {all:unset;cursor:pointer;font-size:12.5px;padding:4px 12px;border-radius:16px;color:var(--um-muted)}
+.um-seg button[aria-pressed="true"] {background:rgba(255,255,255,.1);color:var(--um-fg)}
+.um-seg button:focus-visible,.um-stack div:focus-visible {outline:2px solid var(--um-line2);outline-offset:-2px}
+.um-rows {display:grid;gap:18px}
+.um-row {display:grid;grid-template-columns:110px 1fr auto;gap:8px 14px;align-items:center}
+.um-who {display:flex;gap:8px;align-items:center;font-family:'Outfit',system-ui,sans-serif;font-weight:600}
+.um-dot {width:9px;height:9px;border-radius:50%}
+.um-claude {background:hsl(30,80%,60%)}
+.um-gpt {background:hsl(160,85%,45%)}
+.um-stack {display:flex;height:26px;border-radius:7px;overflow:hidden;background:rgba(255,255,255,.04);min-width:0}
+.um-stack div {display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:600;color:#14100a;white-space:nowrap;overflow:hidden;cursor:default;transition:filter .15s}
+.um-stack div:hover {filter:brightness(1.15)}
+.um-tot {font-size:12px;color:var(--um-muted);font-variant-numeric:tabular-nums;text-align:right;min-width:72px}
+.um-legend {grid-column:2/4;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--um-muted)}
+.um-legend span {display:inline-flex;gap:5px;align-items:center;font-variant-numeric:tabular-nums}
+.um-legend i {width:8px;height:8px;border-radius:2px;display:inline-block}
+.um-cache {display:grid;gap:8px;border-top:1px solid var(--um-line);padding-top:14px}
+.um-crow {display:grid;grid-template-columns:110px 1fr 72px;gap:14px;align-items:center;font-size:13px}
+.um-nm {color:var(--um-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.um-ctrack {height:8px;border-radius:4px;background:rgba(255,255,255,.05);overflow:hidden}
+.um-ctrack div {height:100%;border-radius:4px;background:var(--um-ok);transition:width .4s}
+.um-ctrack div.um-low {background:var(--um-warn)}
+.um-cst {font-size:12px;text-align:right;white-space:nowrap;color:var(--um-ok);font-variant-numeric:tabular-nums}
+.um-cst.um-cold {color:var(--um-faint)}
+.um-cst.um-low {color:var(--um-warn)}
+.um-chip {grid-column:2/4;justify-self:start;font-size:12.5px;border-radius:8px;padding:4px 10px}
+.um-chip.um-warn {color:var(--um-warn);background:rgba(245,158,11,.1)}
+.um-chip.um-ok {color:var(--um-ok);background:rgba(16,185,129,.1)}
+.um-cold-count {grid-column:1/-1}
+.um-foot {font-size:12px;color:var(--um-faint);border-top:1px solid var(--um-line);padding-top:10px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.um-note {font-size:12.5px;color:var(--um-muted)}
+.usage-model [hidden] {display:none}
+.usage-model.tile-arranging {padding-top:48px}
+@media (max-width:560px) {
+    .um-crow {grid-template-columns:1fr 70px}
+    .um-crow .um-ctrack {grid-column:1/3;grid-row:2}
+    .um-row {grid-template-columns:1fr auto}
+    .um-stack {grid-column:1/3;grid-row:2}
+    .um-legend,.um-chip {grid-column:1/3}
+}
+@media (prefers-reduced-motion:reduce) {.usage-model * {transition:none!important}}
+
 .tile-arrange-bar {
     grid-column: 1 / -1;
     display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
