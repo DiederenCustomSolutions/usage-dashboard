@@ -18,7 +18,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js for Analytics (bundled locally — CDN blocked by MV3 CSP) -->
     <script src="lib/chart.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=0.29.0">
+    <link rel="stylesheet" href="style.css?v=0.30.0">
 </head>
 <body>
     <!-- Animated Ambient Background Blobs -->
@@ -642,12 +642,8 @@
                             <h2 id="usage-model-title">Usage by model</h2>
                             <div class="um-ctrls">
                                 <div class="um-seg" role="group" aria-label="Usage period">
-                                    <button type="button" data-um-period="nacht" aria-pressed="true">Last night</button>
-                                    <button type="button" data-um-period="7d" aria-pressed="false">7 days</button>
-                                </div>
-                                <div class="um-seg" role="group" aria-label="Usage grouping">
-                                    <button type="button" data-um-view="model" aria-pressed="true">Model</button>
-                                    <button type="button" data-um-view="wie" aria-pressed="false">Who</button>
+                                    <button type="button" data-um-period="day" aria-pressed="false">Last day</button>
+                                    <button type="button" data-um-period="7d" aria-pressed="true">7 days</button>
                                 </div>
                             </div>
                         </div>
@@ -1176,6 +1172,6 @@
     </div>
 
     <!-- Script Entry -->
-    <script src="app.js?v=0.29.0"></script>
+    <script src="app.js?v=0.30.0"></script>
 </body>
 </html>
