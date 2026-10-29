@@ -1,5 +1,5 @@
-// node --test agent-api/test
-// Proves: every configured account is in /v1/usage, the three advice rules hold,
+// node --test agent-api/test/agent-api.test.mjs
+// Proves: every configured account is in /v1/usage,
 // the token is required, and a database outage still answers JSON within 2 s.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -7,7 +7,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { encrypt, decrypt, buildUsage, advise, createStore, createServer, isDaytime, clientAllowed } from "../server.mjs";
+import { encrypt, decrypt, buildUsage, createStore, createServer, clientAllowed } from "../server.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const config = JSON.parse(fs.readFileSync(path.join(here, "..", "config.example.json"), "utf8"));
@@ -52,34 +52,6 @@ test("all accounts present with the fixed fields", () => {
 test("measurement older than 15 min is not reliable", () => {
     const u = buildUsage(profiles({ seen: NOW - 16 * 60000 }), config, { now: NOW });
     assert.ok(u.accounts.every(a => a.betrouwbaar === false));
-});
-
-test("rule 1: daytime, account1 only under 50% (5 hour)", () => {
-    const rules = config.advies;
-    assert.equal(isDaytime(NOW, rules), true);
-    // account1 least used, 5 hour at 5%: chosen for small work during the day.
-    let u = buildUsage(profiles({ rob5h: 5, robWeek: 5 }), config, { now: NOW });
-    assert.equal(advise(u, rules, { soort: "klein", overdag: true }).account, "account1");
-    // 5 hour at 55%: skipped during the day, allowed in the evening.
-    u = buildUsage(profiles({ rob5h: 55, robWeek: 5, lxdg5h: 60, lxdgWeek: 60, kb: 70 }), config, { now: NOW });
-    const day = advise(u, rules, { soort: "klein", overdag: true });
-    assert.notEqual(day.account, "account1");
-    assert.match(day.reden, /account1 overdag boven 50%/);
-    assert.equal(advise(u, rules, { soort: "klein", overdag: false }).account, "account1");
-});
-
-test("rule 2: any account at 80% or more (5 hour or week) is skipped", () => {
-    const u = buildUsage(profiles({ kb: 85, lxdg5h: 81, robWeek: 90 }), config, { now: NOW });
-    for (const soort of ["zwaar", "klein"]) assert.equal(advise(u, config.advies, { soort, overdag: false }).account, null);
-    const v = buildUsage(profiles({ kb: 85, lxdgWeek: 80 }), config, { now: NOW });
-    assert.equal(advise(v, config.advies, { soort: "zwaar", overdag: false }).account, "account1");
-});
-
-test("rule 3: heavy work prefers account2 (no 5-hour limit)", () => {
-    const u = buildUsage(profiles({ kb: 60, lxdg5h: 0, lxdgWeek: 0 }), config, { now: NOW });
-    const a = advise(u, config.advies, { soort: "zwaar", overdag: true });
-    assert.equal(a.account, "account2");
-    assert.match(a.reden, /geen 5-uurslimiet/);
 });
 
 test("only loopback and tailnet clients", () => {
@@ -133,8 +105,7 @@ test("HTTP: token, JSON, refresh trigger, outage fallback", async () => {
         assert.equal(fb.meta.refreshRequested, true);
         assert.deepEqual(fb.meta.dashboardConfig, { x: 1 });
 
-        const adv = await (await get("/v1/advies?soort=zwaar&overdag=true")).json();
-        assert.equal(adv.account, "account2");
+        assert.equal((await get("/v1/advies?soort=zwaar")).status, 404);
 
         // Database down: last values, betrouwbaar false, still JSON, within 2 s.
         fb.down = true; now += 1000;
@@ -145,7 +116,6 @@ test("HTTP: token, JSON, refresh trigger, outage fallback", async () => {
         assert.equal(ids(d), "account1,account2,account3,claude");
         assert.ok(d.accounts.every(a => a.betrouwbaar === false));
         assert.match(d.fout, /laatste bekende waarden/);
-        assert.equal((await get("/v1/advies?soort=klein")).status, 200);
     } finally {
         server.close(); fbServer.close();
     }
