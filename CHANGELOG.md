@@ -4,6 +4,16 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.31.0] — 2026-10-29
+
+- **Usage read service for agents** (`agent-api/`). It runs on the agents-pc and has two endpoints:
+  - `GET /v1/usage` returns the usage per subscription (account1/2/3, claude);
+  - `GET /v1/advies` returns the best account for heavy or small work.
+
+  It is read-only and needs a Bearer token. Answers come from a cache within 2 s; when the database is unreachable, the last values are returned with `betrouwbaar: false`. Stale data asks the measuring Chromes for a refresh, the same as the refresh button. The advice rules live in a config file.
+
+  `agent-api/README.md` has example calls, the PowerShell helper `Get-Usage.ps1`, and the test that covers all accounts and the three rules. The extension's self-updater skips `agent-api/`.
+
 ## [0.30.0] — 2026-10-21
 
 - **Usage by model now comes from the measuring Chromes, for everyone.** ChatGPT shows per person which models used the limit (Sol, Astra, Luna), for the last day with figures or the last 7 days. Claude shows per person how this week's usage splits over Claude Code, Chats and Cowork, plus a model's own weekly limit (such as Fable). claude.ai has no split per model. The tile only appears when there is something to show.

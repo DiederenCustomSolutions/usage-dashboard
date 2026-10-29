@@ -1,0 +1,30 @@
+{
+  "poort": 8787,
+  "adres": "0.0.0.0",
+  "toegestaan": ["127.0.0.1", "100.64.0.0/10"],
+  "sync_bestand": "sync.json",
+  "token_bestand": "token",
+  "cache_bestand": "cache.json",
+  "cache_s": 20,
+  "leestijd_ms": 1500,
+  "betrouwbaar_max_min": 15,
+  "ververs_na_min": 5,
+  "ververs_vraag_min_s": 120,
+  "accounts": [
+    { "id": "account1", "naam": "ChatGPT Rob", "eigenaar": "Rob", "dienst": "chatgpt", "abonnement": "team", "profiel": "pid-mufadq04-gpx8xl" },
+    { "id": "account2", "naam": "ChatGPT KB PRO", "eigenaar": "Kevin", "dienst": "chatgpt", "abonnement": "prolite", "profiel": "pid-muqmwdvt-wifr8o" },
+    { "id": "account3", "naam": "ChatGPT Kevin – LXDG-DCS", "eigenaar": "Kevin", "dienst": "chatgpt", "abonnement": "team", "profiel": "pid-muqnflpt-0g6nuh" },
+    { "id": "claude", "naam": "Claude Rob", "eigenaar": "Rob", "dienst": "claude", "abonnement": "max", "profiel": "pid-mufadq04-gpx8xl" }
+  ],
+  "advies": {
+    "tijdzone": "Europe/Amsterdam",
+    "overdag": { "van": 8, "tot": 18 },
+    "max_pct": 80,
+    "overdag_max_5u": { "account1": 50 },
+    "voorkeur": {
+      "zwaar": ["account2", "account3", "account1"],
+      "klein": ["account1", "account3", "account2"]
+    },
+    "kies": { "zwaar": "volgorde", "klein": "laagste" }
+  }
+}
