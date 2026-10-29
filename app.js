@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.30.0";
+const APP_VERSION = "0.31.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -461,7 +461,7 @@ function setDeploySyncIndicator(status, label, detail) {
 const UPDATE_REPO = "DiederenCustomSolutions/usage-dashboard";
 const UPDATE_HANDLE_DB = "ud-self-update";
 // Repo paths that are not part of the extension itself (docs, tooling, archive).
-const UPDATE_SKIP = [/^old\//, /^\.github\//, /^\.claude\//, /^\.gitignore$/, /\.md$/i, /\.ps1$/i];
+const UPDATE_SKIP = [/^old\//, /^agent-api\//, /^\.github\//, /^\.claude\//, /^\.gitignore$/, /\.md$/i, /\.ps1$/i];
 // A PC that has not been seen for this long no longer counts as "behind".
 const VERSION_BEHIND_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
 
