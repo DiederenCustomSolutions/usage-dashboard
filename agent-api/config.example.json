@@ -1,6 +1,7 @@
 {
   "poort": 8787,
-  "adressen": ["127.0.0.1"],
+  "adres": "0.0.0.0",
+  "toegestaan": ["127.0.0.1", "100.64.0.0/10"],
   "sync_bestand": "sync.json",
   "token_bestand": "token",
   "cache_bestand": "cache.json",

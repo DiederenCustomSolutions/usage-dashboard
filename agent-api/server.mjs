@@ -157,6 +157,20 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile } = 
 // ---------------------------------------------------------------------------
 // HTTP
 
+// Client address check: "127.0.0.1", "100.64.0.0/10" etc. (IPv4, also as ::ffff:a.b.c.d).
+export function clientAllowed(remote, allowed) {
+    if (!allowed || !allowed.length) return true;
+    const ip = String(remote || "").replace(/^::ffff:/, "");
+    if (ip === "::1") return allowed.includes("127.0.0.1") || allowed.includes("127.0.0.0/8");
+    const num = s => s.split(".").reduce((n, p) => n * 256 + Number(p), 0);
+    if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return false;
+    return allowed.some(rule => {
+        const [base, bits = "32"] = rule.split("/");
+        const mask = Number(bits) === 0 ? 0 : 2 ** 32 - 2 ** (32 - Number(bits));
+        return (num(ip) & mask) >>> 0 === (num(base) & mask) >>> 0;
+    });
+}
+
 function tokenOk(header, token) {
     const m = /^Bearer\s+(.+)$/i.exec(header || "");
     if (!m) return false;
@@ -172,6 +186,7 @@ export function createServer({ config, token, store, clock = () => Date.now() })
         };
         try {
             const u = new URL(req.url, "http://localhost");
+            if (!clientAllowed(req.socket.remoteAddress, config.toegestaan)) return send(403, { fout: "niet vanaf dit adres" });
             if (req.method !== "GET") return send(405, { fout: "alleen GET" });
             if (!tokenOk(req.headers.authorization, token)) return send(401, { fout: "token ontbreekt of klopt niet" });
             const now = clock();
@@ -201,9 +216,8 @@ export function loadAll(configPath = DEFAULT_CONFIG_PATH) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
     const { config, secrets, token, cacheFile } = loadAll();
     const store = createStore(config, secrets, { cacheFile });
-    const server = createServer({ config, token, store });
-    for (const host of config.adressen || ["127.0.0.1"]) {
-        const s = host === (config.adressen || ["127.0.0.1"])[0] ? server : createServer({ config, token, store });
-        s.listen(config.poort || 8787, host, () => console.log(`usage-api listening on http://${host}:${config.poort || 8787}`));
-    }
+    // One listener; with 0.0.0.0 the toegestaan list limits clients (loopback + tailnet), so
+    // the service does not depend on Tailscale being up before it starts.
+    const host = config.adres || "127.0.0.1", port = config.poort || 8787;
+    createServer({ config, token, store }).listen(port, host, () => console.log(`usage-api listening on http://${host}:${port}`));
 }

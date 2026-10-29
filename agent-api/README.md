@@ -6,6 +6,8 @@ Agents vragen hier het actuele verbruik per abonnement op en welk account ze het
 
 Het token staat in `~/.config/usage-api/token` en hoort in de header. Zet het nooit in een URL of een log.
 
+Op de agents-pc is het adres `http://127.0.0.1:8787`. Via het tailnet is het `http://100.70.217.45:8787`; de omgevingsvariabele `USAGE_API_URL` op Robs pc wijst daarheen. Andere adressen krijgen 403.
+
 **curl**
 ```bash
 curl -s -H "Authorization: Bearer $(cat ~/.config/usage-api/token)" http://127.0.0.1:8787/v1/usage

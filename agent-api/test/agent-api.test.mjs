@@ -7,7 +7,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { encrypt, decrypt, buildUsage, advise, createStore, createServer, isDaytime } from "../server.mjs";
+import { encrypt, decrypt, buildUsage, advise, createStore, createServer, isDaytime, clientAllowed } from "../server.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const config = JSON.parse(fs.readFileSync(path.join(here, "..", "config.example.json"), "utf8"));
@@ -80,6 +80,12 @@ test("rule 3: heavy work prefers account2 (no 5-hour limit)", () => {
     const a = advise(u, config.advies, { soort: "zwaar", overdag: true });
     assert.equal(a.account, "account2");
     assert.match(a.reden, /geen 5-uurslimiet/);
+});
+
+test("only loopback and tailnet clients", () => {
+    const allowed = config.toegestaan;
+    for (const ip of ["127.0.0.1", "::ffff:127.0.0.1", "::1", "100.70.217.45", "100.127.255.1"]) assert.equal(clientAllowed(ip, allowed), true, ip);
+    for (const ip of ["192.168.1.20", "::ffff:10.0.0.5", "100.128.0.1", "fe80::1"]) assert.equal(clientAllowed(ip, allowed), false, ip);
 });
 
 // Integration: real HTTP server against a fake Firebase.
