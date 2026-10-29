@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.32.0] — 2026-10-29
+
+- **The usage service now only serves the dashboard data** (`GET /v1/usage`). `/v1/advies` and its rules are gone: which account an agent takes is decided by the agents themselves (agents-infra for Hermes, ACCOUNTS.md for /delegeer), not in this repo. `Get-Usage.ps1` no longer has `-Advies`.
+
 ## [0.31.0] — 2026-10-29
 
 - **Usage read service for agents** (`agent-api/`). It runs on the agents-pc and has two endpoints:

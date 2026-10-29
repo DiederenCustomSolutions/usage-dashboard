@@ -15,16 +15,5 @@
     { "id": "account2", "naam": "ChatGPT KB PRO", "eigenaar": "Kevin", "dienst": "chatgpt", "abonnement": "prolite", "profiel": "pid-muqmwdvt-wifr8o" },
     { "id": "account3", "naam": "ChatGPT Kevin – LXDG-DCS", "eigenaar": "Kevin", "dienst": "chatgpt", "abonnement": "team", "profiel": "pid-muqnflpt-0g6nuh" },
     { "id": "claude", "naam": "Claude Rob", "eigenaar": "Rob", "dienst": "claude", "abonnement": "max", "profiel": "pid-mufadq04-gpx8xl" }
-  ],
-  "advies": {
-    "tijdzone": "Europe/Amsterdam",
-    "overdag": { "van": 8, "tot": 18 },
-    "max_pct": 80,
-    "overdag_max_5u": { "account1": 50 },
-    "voorkeur": {
-      "zwaar": ["account2", "account3", "account1"],
-      "klein": ["account1", "account3", "account2"]
-    },
-    "kies": { "zwaar": "volgorde", "klein": "laagste" }
-  }
+  ]
 }

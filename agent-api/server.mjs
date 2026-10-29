@@ -1,5 +1,6 @@
-// Usage read service for AI agents (v0.31.0).
-// GET /v1/usage and GET /v1/advies, read-only, Bearer token. Reads the same encrypted
+// Usage read service for AI agents (v0.32.0).
+// GET /v1/usage, read-only, Bearer token. Which account an agent takes is decided
+// on the agents side (agents-infra), not here. Reads the same encrypted
 // status nodes the dashboard reads; never measures itself. A request is the trigger:
 // stale data asks the measuring Chromes for a refresh (like the dashboard's refresh
 // button) and the answer comes from cache right away. No timers.
@@ -54,39 +55,6 @@ export function buildUsage(profiles, config, { now = Date.now(), readOk = true, 
         gemeten_op: iso(readAt),
         accounts: config.accounts.map(def => buildAccount(def, (profiles || {})[def.profiel], { now, readOk, staleMin }))
     };
-}
-
-// Daytime in the configured time zone (default Europe/Amsterdam).
-export function isDaytime(now, rules) {
-    const hour = Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: rules.tijdzone || "Europe/Amsterdam" }).format(new Date(now)));
-    return hour >= rules.overdag.van && hour < rules.overdag.tot;
-}
-
-// Best account for a job. Rules come from the config file:
-//   max_pct            skip an account at or above this on the 5-hour or the week limit
-//   overdag_max_5u     per account: stricter 5-hour limit during the day
-//   voorkeur[soort]    candidate order; kies[soort] = "volgorde" (first that fits) or "laagste" (least used)
-export function advise(usage, rules, { soort = "klein", overdag } = {}) {
-    const daytime = overdag ?? false;
-    const byId = Object.fromEntries(usage.accounts.map(a => [a.id, a]));
-    const order = rules.voorkeur[soort] || rules.voorkeur.klein;
-    const skipped = [];
-    const fits = order.map(id => byId[id]).filter(Boolean).filter(a => {
-        if (!a.week && !a.vijf_uur) { skipped.push(`${a.id} geen meting`); return false; }
-        const five = a.vijf_uur ? a.vijf_uur.gebruikt_pct : 0, week = a.week ? a.week.gebruikt_pct : 0;
-        if (five >= rules.max_pct || week >= rules.max_pct) { skipped.push(`${a.id} boven ${rules.max_pct}%`); return false; }
-        const dayCap = daytime && rules.overdag_max_5u ? rules.overdag_max_5u[a.id] : undefined;
-        if (dayCap !== undefined && five >= dayCap) { skipped.push(`${a.id} overdag boven ${dayCap}% (5 uur)`); return false; }
-        return true;
-    });
-    if (!fits.length) return { account: null, reden: `geen account vrij: ${skipped.join(", ") || "geen kandidaten"}` };
-    const load = a => Math.max(a.vijf_uur ? a.vijf_uur.gebruikt_pct : 0, a.week ? a.week.gebruikt_pct : 0);
-    const pick = (rules.kies && rules.kies[soort]) === "laagste" ? fits.slice().sort((x, y) => load(x) - load(y))[0] : fits[0];
-    const parts = [`${soort} werk${daytime ? " overdag" : ""}`, `${pick.id} op ${load(pick)}%`];
-    if (!pick.vijf_uur) parts.push("geen 5-uurslimiet");
-    if (skipped.length) parts.push(`overgeslagen: ${skipped.join(", ")}`);
-    if (!pick.betrouwbaar) parts.push("let op: meting ouder dan grens");
-    return { account: pick.id, reden: parts.join("; ") };
 }
 
 // ---------------------------------------------------------------------------
@@ -191,13 +159,7 @@ export function createServer({ config, token, store, clock = () => Date.now() })
             if (!tokenOk(req.headers.authorization, token)) return send(401, { fout: "token ontbreekt of klopt niet" });
             const now = clock();
             if (u.pathname === "/v1/usage") return send(200, await store.usage(now));
-            if (u.pathname === "/v1/advies") {
-                const soort = u.searchParams.get("soort") === "zwaar" ? "zwaar" : "klein";
-                const o = u.searchParams.get("overdag");
-                const overdag = o === "true" ? true : o === "false" ? false : isDaytime(now, config.advies);
-                return send(200, advise(await store.usage(now), config.advies, { soort, overdag }));
-            }
-            return send(404, { fout: "onbekend pad; gebruik /v1/usage of /v1/advies" });
+            return send(404, { fout: "onbekend pad; gebruik /v1/usage" });
         } catch (e) {
             send(500, { fout: "interne fout" });
         }
