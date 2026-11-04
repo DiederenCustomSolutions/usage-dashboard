@@ -43,6 +43,15 @@ Elke aanvraag krijgt binnen 2 seconden antwoord uit de cache. De database wordt 
 
 Is de nieuwste meting ouder dan 5 minuten, dan vraagt de service de meet-Chromes om te verversen. Dat is hetzelfde als de verversknop op het dashboard en gebeurt hooguit eens per 2 minuten. De service heeft geen timer: alleen een aanvraag zet iets in gang.
 
+## Herstel van de meet-Chromes
+
+`herstel-meetchromes.sh` start één keer per aanleiding, nooit op een timer:
+
+- **Opstarten van de agents-pc** (`usage-herstel@boot.service`): twee minuten na de start kijkt het of alle vier de Chromes draaien en echt meten. Zo niet, dan herstart het ze en stuurt het één Telegram-bericht.
+- **Chrome-update** (`usage-herstel-chrome.path`): zodra apt klaar is, herstart het de vier Chromes. Anders start Chrome zichzelf opnieuw, buiten zijn service en zonder de extensie (4-11-2026).
+
+Lukt het herstel niet, dan komt er een Telegram-bericht via het profiel `github-it`. Het logboek staat in `journalctl --user -u 'usage-herstel@*'`.
+
 ## Installeren en testen
 
 Installeren op de agents-pc:
@@ -51,7 +60,7 @@ Installeren op de agents-pc:
 bash ~/usage-dashboard-proef/agent-api/install.sh
 ```
 
-Het script maakt de config en het token aan, haalt de sleutel uit de meet-Chrome en zet de user-service `usage-api` aan.
+Het script maakt de config en het token aan, haalt de sleutel uit de meet-Chrome en zet de user-service `usage-api` en het herstel aan.
 
 Testen:
 

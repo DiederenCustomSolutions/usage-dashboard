@@ -25,7 +25,34 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 EOF
+
+# Repair of the measuring Chromes: once per graphical start and once per Chrome update.
+cat > "$HOME/.config/systemd/user/usage-herstel@.service" <<EOF
+[Unit]
+Description=Measuring Chromes back after %i
+
+[Service]
+Type=oneshot
+ExecStart=$HERE/herstel-meetchromes.sh %i
+TimeoutStartSec=45min
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+cat > "$HOME/.config/systemd/user/usage-herstel-chrome.path" <<EOF
+[Unit]
+Description=Watch for a Chrome update
+
+[Path]
+PathChanged=/opt/google/chrome/chrome
+Unit=usage-herstel@update.service
+
+[Install]
+WantedBy=default.target
+EOF
 systemctl --user daemon-reload
+systemctl --user enable usage-herstel@boot.service
+systemctl --user enable --now usage-herstel-chrome.path
 systemctl --user enable --now usage-api.service
 systemctl --user restart usage-api.service
 sleep 1

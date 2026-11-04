@@ -120,3 +120,13 @@ test("HTTP: token, JSON, refresh trigger, outage fallback", async () => {
         server.close(); fbServer.close();
     }
 });
+
+test("repair check: every account must be measured after the moment asked for", async () => {
+    const { allMeasuredSince } = await import("../herstel-check.mjs");
+    const seen = iso => ({ laatst_gezien: iso });
+    const since = Date.parse("2026-11-04T11:44:00Z");
+    assert.equal(allMeasuredSince([seen("2026-11-04T11:44:10Z"), seen("2026-11-04T11:45:00Z")], since), true);
+    assert.equal(allMeasuredSince([seen("2026-11-04T11:44:10Z"), seen("2026-11-04T09:55:00Z")], since), false);
+    assert.equal(allMeasuredSince([seen("2026-11-04T11:44:10Z"), seen(null)], since), false);
+    assert.equal(allMeasuredSince([], since), false);
+});

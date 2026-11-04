@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.33.0] — 2026-11-04
+
+- **The measuring Chromes repair themselves.** After the agents-pc starts, a one-off check on the agents-pc verifies that all four run and really measure, and restarts them when they do not. After a Chrome update they are restarted once apt is done, because Chrome otherwise relaunches itself outside its service and without the extension. There is no timer; both run once on their event. Telegram only when a start needed a repair, or when the repair failed. `agent-api/install.sh` installs it.
+
 ## [0.32.0] — 2026-10-29
 
 - **The usage service now only serves the dashboard data** (`GET /v1/usage`). `/v1/advies` and its rules are gone: which account an agent takes is decided by the agents themselves (agents-infra for Hermes, ACCOUNTS.md for /delegeer), not in this repo. `Get-Usage.ps1` no longer has `-Advies`.
