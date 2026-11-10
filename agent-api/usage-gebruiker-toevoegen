@@ -1,0 +1,3 @@
+#!/bin/bash
+# usage-gebruiker-toevoegen <name> [--tailnet] [--min N]: add a measuring user (see the .mjs next to this script).
+exec node "$(dirname "$(readlink -f "$0")")/usage-gebruiker-toevoegen.mjs" "$@"

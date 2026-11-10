@@ -4,6 +4,13 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.35.0] — 2026-11-10
+
+- **Adding a measuring user is one step.** The profiles sidebar has an "Add measuring profile" button: fill in a name, the agents-pc creates a Chrome of its own for it and returns a login link. The same from the command line: `usage-gebruiker-toevoegen <name>`. The Chrome always starts with `--password-store=basic` and its own debug port; the pairing with the dashboard is set through the extension. Same encrypted `meta` route as the Log in button (`addRequests` / `addResults`), no timer.
+- **One list of measuring profiles** (`profielen.json` in `~/.config/usage-api/`; `agent-api/profielen.example.json` has the four existing ones): name, profile id, services, ports, and `extern`. `usage-inloglink`, the repair script, the autoupdate script (now `agent-api/usage-chrome-autoupdate.sh`), the Kevin script (now one `usage-chrome-script.py` for both) and the Chrome unit read it; names and ports are no longer written into the scripts. `inlog_profielen` is gone from `config.json`.
+- **Public login link for a new user (Tailscale Funnel).** A profile marked `extern` gets an https link on Funnel port 8443 instead of a tailnet link: 64-hex token, at most 60 min (30 by default), and Funnel is switched off again when the link stops (also after a crash, and at every start of the agents-pc). Rob, Raimond and Kevin are never public. While the link runs, anyone who has it can use a login screen of that Chrome from the internet.
+- Rerun `agent-api/install.sh` on the agents-pc (replaces the Chrome unit and its debug-port drop-ins; running Chromes are not touched). Not tested live: Funnel, adding a real profile.
+
 ## [0.34.0] — 2026-11-10
 
 - **A logged-out account gets a "Log in" button.** The tile of an account that says "check if logged in" asks the agents-pc for a login link to that measuring Chrome. The tile then shows "Open login" and a copy button; the link works only on devices in the tailnet and for 30 minutes. `usage-api` listens on one stream on the shared `meta` node (push, no timer) and starts `usage-inloglink`, which is now in `agent-api/`. Rerun `agent-api/install.sh` on the agents-pc.

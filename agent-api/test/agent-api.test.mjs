@@ -213,3 +213,161 @@ test("login link: the stream triggers the work (push); no request, no run", asyn
         assert.equal(calls.length, 1);                      // its own write on the stream does not run it again
     } finally { stream.close(); for (const c of sse) c.end(); server.close(); }
 });
+
+// ---- v0.35.0: one profile list, "add measuring profile", public login link ----
+import os from "node:os";
+import { spawnSync } from "node:child_process";
+const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "usage-prof-"));
+const exampleList = () => JSON.parse(fs.readFileSync(path.join(here, "..", "profielen.example.json"), "utf8"));
+
+test("profile list: example matches the four live profiles; validation; pids", async () => {
+    const P = await import("../profielen.mjs");
+    const list = P.validate(exampleList());
+    assert.deepEqual(list.profielen.map(p => [p.naam, p.debugpoort, p.webpoort]),
+        [["rob", 9231, 8791], ["raimond", 9232, 8792], ["kevin", 9233, 8793], ["kevin-lxdg", 9234, 8794]]);
+    assert.equal(P.pidMap(list)["pid-muf9i094-12cwr6"], "raimond");
+    assert.equal(P.startSite(P.byName(list, "kevin")), "chatgpt");
+    assert.equal(P.startSite(P.byName(list, "raimond")), "claude");
+    assert.ok(list.profielen.every(p => p.extern === false), "existing users are never public");
+    for (const bad of [{ naam: "Bad Name" }, { naam: "rob" }, { naam: "x1", debugpoort: 9231 }]) {
+        const l = exampleList(); l.profielen.push({ pid: null, start: "unit", debugpoort: 9300, webpoort: 8800, ...bad });
+        assert.throws(() => P.validate(l));
+    }
+});
+
+test("profile list: new ports are the first free ones; add is saved and locked", async () => {
+    const P = await import("../profielen.mjs");
+    const dir = tmpDir(), file = path.join(dir, "profielen.json");
+    fs.writeFileSync(file, JSON.stringify(exampleList()));
+    assert.deepEqual(P.pickPorts(exampleList()), { debugpoort: 9235, webpoort: 8795 });
+    assert.deepEqual(P.pickPorts(exampleList(), [9235, 8795]), { debugpoort: 9236, webpoort: 8796 });
+    P.addProfiel(file, { naam: "anna", ports: P.pickPorts(exampleList()), label: "Anna" });
+    const l = P.loadProfielen(file), a = P.byName(l, "anna");
+    assert.deepEqual([a.start, a.extern, a.pid, a.debugpoort, a.webpoort], ["unit", true, null, 9235, 8795]);
+    assert.throws(() => P.addProfiel(file, { naam: "anna", ports: { debugpoort: 9300, webpoort: 8800 } }), e => e.code === "EXISTS");
+    P.setField(file, "anna", "pid", "pid-abc-123");
+    assert.equal(P.pidMap(P.loadProfielen(file))["pid-abc-123"], "anna");
+    assert.ok(!fs.existsSync(file + ".lock"), "lock released");
+    P.syncEnv(P.loadProfielen(file), path.join(dir, "env"));
+    assert.equal(fs.readFileSync(path.join(dir, "env", "anna.env"), "utf8"), "DEBUG_PORT=9235\n");
+    assert.ok(!fs.existsSync(path.join(dir, "env", "kevin.env")), "script profiles have no unit env file");
+    // CLI used by the shell scripts.
+    const env = { ...process.env, USAGE_PROFIELEN: file };
+    const get = (...a) => spawnSync(process.execPath, [path.join(here, "..", "profielen.mjs"), ...a], { env, encoding: "utf8" }).stdout.trim();
+    assert.equal(get("get", "anna", "webpoort"), "8795");
+    assert.equal(get("names", "script").replace(/\r/g, ""), "kevin\nkevin-lxdg");
+});
+
+test("add user: ports, unit with its own debug port, pairing, pid, link; rolls back on failure", async () => {
+    const { addUser, parseArgs } = await import("../usage-gebruiker-toevoegen.mjs");
+    const P = await import("../profielen.mjs");
+    const dir = tmpDir(), file = path.join(dir, "profielen.json");
+    process.env.USAGE_API_DIR = dir;
+    fs.writeFileSync(file, JSON.stringify(exampleList()));
+    const http2 = http.createServer((q, r) => r.end("{}"));
+    await new Promise(r => http2.listen(0, "127.0.0.1", r));
+    const calls = [], prov = [];
+    const mk = (over = {}) => ({
+        file, sleepFn: async () => {}, chromeDir: n => path.join(dir, "chrome-" + n), readSync: () => ({ binId: "b", pairingKey: "SECRET-KEY" }),
+        portsFor: async () => ({ debugpoort: http2.address().port, webpoort: 8795 }),
+        run: async (c, a) => { calls.push([path.basename(c), ...a]); return String(c).endsWith("usage-inloglink") ? "started\nhttps://h.ts.net:8443/" + "d".repeat(64) + "\n" : ""; },
+        ext: { provisionSync: async (port, v) => { prov.push(v.label); return "set"; }, readProfileId: async () => "pid-new-1" }, log: () => {}, ...over
+    });
+    try {
+        assert.equal(await addUser({ naam: "anna", min: 30 }, mk()), "https://h.ts.net:8443/" + "d".repeat(64));
+        const a = P.byName(P.loadProfielen(file), "anna");
+        assert.deepEqual([a.pid, a.extern, a.start], ["pid-new-1", true, "unit"]);
+        assert.deepEqual(calls[0], ["systemctl", "--user", "enable", "--now", "chrome-usage@anna.service"]);
+        assert.deepEqual(calls[1], ["usage-inloglink", "anna", "30"]);
+        assert.deepEqual(prov, ["Anna"]);
+        assert.equal(fs.readFileSync(path.join(dir, "chrome-env", "anna.env"), "utf8"), `DEBUG_PORT=${http2.address().port}\n`);
+        // Taken and invalid names: exit codes 3 and 2, nothing changed.
+        await assert.rejects(addUser({ naam: "anna" }, mk()), e => e.code === 3);
+        await assert.rejects(addUser({ naam: "rob" }, mk()), e => e.code === 3);
+        await assert.rejects(addUser({ naam: "Bad;name" }, mk()), e => e.code === 2);
+        // Chrome that never answers: the profile is removed again, the unit disabled.
+        calls.length = 0;
+        await assert.rejects(addUser({ naam: "bob", min: 30 }, mk({ portsFor: async () => ({ debugpoort: 1999, webpoort: 8796 }) })), /did not start/);
+        assert.equal(P.byName(P.loadProfielen(file), "bob"), undefined);
+        assert.ok(calls.some(c => c.includes("disable") && c.includes("chrome-usage@bob.service")));
+    } finally { http2.close(); delete process.env.USAGE_API_DIR; }
+    assert.deepEqual(parseArgs(["anna", "--tailnet", "--min", "10"]), { naam: "anna", tailnet: true, min: 10 });
+    assert.equal(parseArgs(["a", "b"]), null);
+});
+
+test("login service: addRequests become an addResults entry; bad or taken names give a short error", async () => {
+    const { createLoginService } = await import("../inlog.mjs");
+    const now = Date.now();
+    const st = { puts: 0, meta: { schema: 2, loginRequests: {}, addRequests: { a1: { name: "anna", at: now - 1000 }, a2: { name: "Bad name", at: now - 1000 }, a3: { name: "rob", at: now - 1000 }, a4: { name: "old", at: now - 3600e3 } },
+        addResults: { gone: { name: "x", at: now - 2 * 86400e3 } } } };
+    const { server } = await fakeMetaDb(st);
+    const ran = [];
+    const runAdd = async n => { ran.push(n); if (n === "rob") throw Object.assign(new Error("x"), { code: 3 }); return "https://h.ts.net:8443/" + "e".repeat(64); };
+    const svc = createLoginService(config, { dbUrl: `http://127.0.0.1:${server.address().port}`, binId: "bin", pairingKey: KEY }, { runAdd });
+    try {
+        await svc.check();
+        assert.deepEqual(ran.sort(), ["anna", "rob"]);                       // the bad name never reaches the command
+        const r = st.meta.addResults;
+        assert.equal(r.a1.public, true); assert.match(r.a1.url, /^https:\/\//); assert.equal(r.a1.until - r.a1.at, 30 * 60000);
+        assert.equal(r.a2.error, "invalid name");
+        assert.equal(r.a3.error, "name already exists");
+        assert.equal(r.gone, undefined, "old results are cleaned up");
+        assert.deepEqual(st.meta.addRequests, {});                           // done and stale ones removed
+    } finally { server.close(); }
+});
+
+test("login service: a pid that is not in the list yet is looked up on demand", async () => {
+    const { createLoginService } = await import("../inlog.mjs");
+    const list = exampleList(); list.profielen.push({ naam: "anna", pid: null, diensten: ["claude"], start: "unit", debugpoort: 9235, webpoort: 8795, extern: true });
+    const st = { puts: 0, meta: { schema: 2, loginRequests: { "pid-anna-1": { at: Date.now() - 500 } } } };
+    const { server } = await fakeMetaDb(st);
+    const calls = [];
+    const svc = createLoginService(config, { dbUrl: `http://127.0.0.1:${server.address().port}`, binId: "bin", pairingKey: KEY }, {
+        profielen: () => list, resolve: () => { list.profielen.find(p => p.naam === "anna").pid = "pid-anna-1"; },
+        run: async n => { calls.push(n); return "https://h.ts.net:8443/" + "f".repeat(64); } });
+    try { await svc.check(); assert.deepEqual(calls, ["anna"]); assert.match(st.meta.loginLinks["pid-anna-1"].url, /^https:/); } finally { server.close(); }
+});
+
+test("runForLink accepts tailnet and Funnel links only", async () => {
+    const { runForLink } = await import("../inlog.mjs");
+    const ok = out => runForLink("x", [], { exec: (c, a, o, cb) => cb(null, out) });
+    assert.equal(await ok("https://h.ts.net:8443/" + "a".repeat(64) + "\n"), "https://h.ts.net:8443/" + "a".repeat(64));
+    assert.equal(await ok("http://h.ts.net:8791/" + "a".repeat(48)), "http://h.ts.net:8791/" + "a".repeat(48));
+    await assert.rejects(ok("https://evil.example/short"));
+    await assert.rejects(runForLink("x", [], { exec: (c, a, o, cb) => cb(Object.assign(new Error("e"), { code: 3 }), "") }), e => e.code === 3);
+});
+
+test("usage-inloglink: public Funnel link only for extern profiles; Funnel off again; token not passed on", () => {
+    const dir = tmpDir(), bin = path.join(dir, "bin"), log = path.join(dir, "calls.log");
+    fs.mkdirSync(bin);
+    const stub = (name, body) => { fs.writeFileSync(path.join(bin, name), "#!/bin/bash\n" + body + "\n", { mode: 0o755 }); };
+    stub("systemctl", "exit 0");
+    stub("systemd-run", `echo "systemd-run $*" >> "${log}"`);
+    stub("journalctl", 'echo "inloglink x actief op 127.0.0.1:1, 30 min"');
+    stub("openssl", 'n=$3; printf "%${n}s" "" | tr " " a; printf "%${n}s" "" | tr " " a; echo');
+    stub("python3", "echo agents.tail.ts.net");
+    stub("tailscale", `if [ "$1 $2" = "status --json" ]; then echo '{}'; exit 0; fi
+if [ "$1 $2" = "funnel status" ]; then echo "$FUNNEL_STATUS"; exit 0; fi
+echo "tailscale $*" >> "${log}"`);
+    const list = exampleList(); list.profielen.push({ naam: "anna", pid: null, diensten: ["claude"], start: "unit", debugpoort: 9235, webpoort: 8795, extern: true });
+    const file = path.join(dir, "profielen.json"); fs.writeFileSync(file, JSON.stringify(list));
+    const run = (args, extra = {}) => {
+        fs.writeFileSync(log, "");
+        const r = spawnSync("bash", [path.join(here, "..", "usage-inloglink"), ...args], { encoding: "utf8", env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, USAGE_PROFIELEN: file, FUNNEL_STATUS: "", ...extra } });
+        return { out: r.stdout.trim(), err: r.stderr, status: r.status, log: fs.readFileSync(log, "utf8") };
+    };
+    const pub = run(["anna", "120"]);
+    assert.equal(pub.out, "https://agents.tail.ts.net:8443/" + "a".repeat(64), pub.err);
+    assert.match(pub.log, /INLOG_FUNNEL=1/);
+    assert.match(pub.log, /RuntimeMaxSec=3660/, "capped at 60 min");
+    assert.match(pub.log, /ExecStopPost=.*funnel --https=8443 off/);
+    assert.match(pub.log, /tailscale funnel --bg --https=8443 http:\/\/127\.0\.0\.1:8795/);
+    assert.ok(!/tailscale [^\n]*a{32}/.test(pub.log), "the token never goes to tailscale");
+    const priv = run(["rob"]);
+    assert.equal(priv.out, "http://agents.tail.ts.net:8791/" + "a".repeat(48));
+    assert.ok(!/funnel|INLOG_FUNNEL/.test(priv.log), "Rob stays tailnet-only");
+    assert.match(run(["anna", "--tailnet"]).out, /^http:\/\//);
+    const busy = run(["anna"], { FUNNEL_STATUS: "https://x.ts.net:8443 (Funnel on)" });
+    assert.notEqual(busy.status, 0); assert.match(busy.out, /in use/);
+    assert.notEqual(run(["nobody"]).status, 0);
+});

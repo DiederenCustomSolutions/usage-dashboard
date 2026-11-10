@@ -1,0 +1,8 @@
+{
+  "profielen": [
+    { "naam": "rob", "pid": "pid-mufadq04-gpx8xl", "diensten": ["claude", "chatgpt"], "start": "unit", "debugpoort": 9231, "webpoort": 8791, "extern": false },
+    { "naam": "raimond", "pid": "pid-muf9i094-12cwr6", "diensten": ["claude"], "start": "unit", "debugpoort": 9232, "webpoort": 8792, "extern": false },
+    { "naam": "kevin", "pid": "pid-muqmwdvt-wifr8o", "diensten": ["chatgpt"], "start": "script", "debugpoort": 9233, "webpoort": 8793, "extern": false },
+    { "naam": "kevin-lxdg", "pid": "pid-muqnflpt-0g6nuh", "diensten": ["chatgpt"], "start": "script", "debugpoort": 9234, "webpoort": 8794, "extern": false }
+  ]
+}
