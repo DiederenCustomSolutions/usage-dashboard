@@ -6,7 +6,7 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ## [0.33.1] — 2026-11-10
 
-- **The measuring Chromes start again after the agents-pc restarts.** The repair check from 0.33.0 held up the start of the desktop session, and with it the Chromes of Rob and Raimond, until it timed out after 45 minutes. It now runs once the session is up. Rerun `agent-api/install.sh` on the agents-pc.
+- **The measuring Chromes start again after the agents-pc restarts.** The repair check from 0.33.0 held up the start of the desktop session, and with it the Chromes of Rob and Raimond, until it timed out after 45 minutes. It now runs once the session is up. Starting Kevin's Chromes during a repair is retried when it fails once. Rerun `agent-api/install.sh` on the agents-pc.
 
 ## [0.33.0] — 2026-11-04
 

@@ -49,8 +49,13 @@ restart_chromes() {
     done
     systemctl --user start chrome-usage@rob.service chrome-usage@raimond.service
     # Own scope: a finished service would kill Kevin's Chromes along with its cgroup.
-    systemd-run --user --scope --quiet --collect "$HOME/bin/start-usage-chrome-kevin.sh" restart
-    systemd-run --user --scope --quiet --collect "$HOME/bin/start-usage-chrome-kevin-lxdg.sh" restart
+    # Retry: right after starting the units the user bus once refused a scope (10-11-2026).
+    for p in kevin kevin-lxdg; do
+        for ((i = 0; i < 3; i++)); do
+            systemd-run --user --scope --quiet --collect "$HOME/bin/start-usage-chrome-$p.sh" restart && break
+            sleep 5
+        done
+    done
 }
 
 if [ "$REASON" = update ]; then
