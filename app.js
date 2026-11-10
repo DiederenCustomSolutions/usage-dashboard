@@ -4999,8 +4999,8 @@ document.addEventListener("click", (e) => {
    Knop in de profielenzijbalk: naam invullen, de agents-pc maakt een eigen meet-Chrome en geeft
    een inloglink terug. Zelfde route als de Log in-knop: versleuteld verzoek in
    meta.addRequests[id] = { name, at }, antwoord in meta.addResults[id] (usage-api luistert op
-   zijn ene stream; geen timer). Een nieuwe gebruiker zit buiten het tailnet: de link is dan een
-   tijdelijke publieke link (Tailscale Funnel).
+   zijn ene stream; geen timer). De link is een tailnet-link; alleen een profiel dat Rob bewust op
+   extern zet, krijgt een tijdelijke publieke link (Tailscale Funnel).
    ====================================================================== */
 const ADD_NAME_RE = /^[a-z][a-z0-9-]{1,23}$/;
 const ADD_ERROR_SHOW_MS = 10 * 60000;

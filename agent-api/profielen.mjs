@@ -102,7 +102,7 @@ export function mutate(file, fn) {
     } finally { fs.closeSync(fd); try { fs.unlinkSync(lock); } catch {} }
 }
 
-export function addProfiel(file, { naam, ports, extern = true, diensten = ["claude", "chatgpt"], label }) {
+export function addProfiel(file, { naam, ports, extern = false, diensten = ["claude", "chatgpt"], label }) {
     let added;
     mutate(file, list => {
         if (byName(list, naam)) { const e = new Error("name exists"); e.code = "EXISTS"; throw e; }

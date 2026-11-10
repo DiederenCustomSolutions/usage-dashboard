@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// usage-gebruiker-toevoegen <name> [--tailnet] [--min N]
+// usage-gebruiker-toevoegen <name> [--extern] [--min N]
 // Adds a measuring user in one step: ports from the profile list, a Chrome of its own (unit
 // chrome-usage@<name>, ALWAYS with --password-store=basic and its own debug port), pairing with the
 // dashboard, and a login link as the last line of output. Exit codes: 2 bad name, 3 name taken, 1 other.
-// The link is public (Tailscale Funnel) for a new user unless --tailnet is given; see usage-inloglink.
+// The link is a tailnet link. Only with --extern the profile is marked extern and gets a public
+// Tailscale Funnel link (see usage-inloglink); that is a deliberate choice per profile.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,9 +20,9 @@ const sh = (cmd, args, opts = {}) => new Promise((res, rej) => execFile(cmd, arg
 export const MAX_PROFIELEN = 8;
 
 export function parseArgs(argv) {
-    const o = { naam: null, tailnet: false, min: 30 };
+    const o = { naam: null, extern: false, min: 30 };
     for (let i = 0; i < argv.length; i++) {
-        if (argv[i] === "--tailnet") o.tailnet = true;
+        if (argv[i] === "--extern") o.extern = true;
         else if (argv[i] === "--min") o.min = Number(argv[++i]);
         else if (!o.naam && !argv[i].startsWith("-")) o.naam = argv[i];
         else return null;
@@ -48,7 +49,7 @@ export async function addUser(opts, { file = defaultFile(), run = sh, sleepFn = 
 
     const ports = await portsFor(list);
     const label = naam.charAt(0).toUpperCase() + naam.slice(1);
-    addProfiel(file, { naam, ports, extern: !opts.tailnet, diensten: ["claude", "chatgpt"], label });
+    addProfiel(file, { naam, ports, extern: !!opts.extern, diensten: ["claude", "chatgpt"], label });
     const undo = async () => {
         await run("systemctl", ["--user", "disable", "--now", `chrome-usage@${naam}.service`]).catch(() => {});
         removeProfiel(file, naam);
@@ -74,7 +75,7 @@ export async function addUser(opts, { file = defaultFile(), run = sh, sleepFn = 
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
     const o = parseArgs(process.argv.slice(2));
-    if (!o) { console.error("Usage: usage-gebruiker-toevoegen <name> [--tailnet] [--min N]"); process.exit(2); }
+    if (!o) { console.error("Usage: usage-gebruiker-toevoegen <name> [--extern] [--min N]"); process.exit(2); }
     try { console.log(await addUser(o)); }
     catch (e) { console.error(e.message); process.exit(e.code === 2 || e.code === 3 ? e.code : 1); }
 }

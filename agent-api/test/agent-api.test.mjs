@@ -243,7 +243,7 @@ test("profile list: new ports are the first free ones; add is saved and locked",
     assert.deepEqual(P.pickPorts(exampleList(), [9235, 8795]), { debugpoort: 9236, webpoort: 8796 });
     P.addProfiel(file, { naam: "anna", ports: P.pickPorts(exampleList()), label: "Anna" });
     const l = P.loadProfielen(file), a = P.byName(l, "anna");
-    assert.deepEqual([a.start, a.extern, a.pid, a.debugpoort, a.webpoort], ["unit", true, null, 9235, 8795]);
+    assert.deepEqual([a.start, a.extern, a.pid, a.debugpoort, a.webpoort], ["unit", false, null, 9235, 8795]);   // tailnet link unless chosen otherwise
     assert.throws(() => P.addProfiel(file, { naam: "anna", ports: { debugpoort: 9300, webpoort: 8800 } }), e => e.code === "EXISTS");
     P.setField(file, "anna", "pid", "pid-abc-123");
     assert.equal(P.pidMap(P.loadProfielen(file))["pid-abc-123"], "anna");
@@ -274,9 +274,9 @@ test("add user: ports, unit with its own debug port, pairing, pid, link; rolls b
         ext: { provisionSync: async (port, v) => { prov.push(v.label); return "set"; }, readProfileId: async () => "pid-new-1" }, log: () => {}, ...over
     });
     try {
-        assert.equal(await addUser({ naam: "anna", min: 30 }, mk()), "https://h.ts.net:8443/" + "d".repeat(64));
+        assert.equal(await addUser({ naam: "anna", min: 30 }, mk()), "https://h.ts.net:8443/" + "d".repeat(64));   // link text comes from the stub
         const a = P.byName(P.loadProfielen(file), "anna");
-        assert.deepEqual([a.pid, a.extern, a.start], ["pid-new-1", true, "unit"]);
+        assert.deepEqual([a.pid, a.extern, a.start], ["pid-new-1", false, "unit"]);
         assert.deepEqual(calls[0], ["systemctl", "--user", "enable", "--now", "chrome-usage@anna.service"]);
         assert.deepEqual(calls[1], ["usage-inloglink", "anna", "30"]);
         assert.deepEqual(prov, ["Anna"]);
@@ -290,8 +290,16 @@ test("add user: ports, unit with its own debug port, pairing, pid, link; rolls b
         await assert.rejects(addUser({ naam: "bob", min: 30 }, mk({ portsFor: async () => ({ debugpoort: 1999, webpoort: 8796 }) })), /did not start/);
         assert.equal(P.byName(P.loadProfielen(file), "bob"), undefined);
         assert.ok(calls.some(c => c.includes("disable") && c.includes("chrome-usage@bob.service")));
+        // Public only when asked for.
+        const http3 = http.createServer((q, r) => r.end("{}"));
+        await new Promise(r => http3.listen(0, "127.0.0.1", r));
+        try {
+            await addUser({ naam: "carl", min: 30, extern: true }, mk({ portsFor: async () => ({ debugpoort: http3.address().port, webpoort: 8797 }) }));
+            assert.equal(P.byName(P.loadProfielen(file), "carl").extern, true);
+        } finally { http3.close(); }
     } finally { http2.close(); delete process.env.USAGE_API_DIR; }
-    assert.deepEqual(parseArgs(["anna", "--tailnet", "--min", "10"]), { naam: "anna", tailnet: true, min: 10 });
+    assert.deepEqual(parseArgs(["anna", "--extern", "--min", "10"]), { naam: "anna", extern: true, min: 10 });
+    assert.deepEqual(parseArgs(["anna"]), { naam: "anna", extern: false, min: 30 });
     assert.equal(parseArgs(["a", "b"]), null);
 });
 
@@ -364,7 +372,7 @@ echo "tailscale $*" >> "${log}"`);
     assert.match(pub.log, /tailscale funnel --bg --https=8443 http:\/\/127\.0\.0\.1:8795/);
     assert.ok(!/tailscale [^\n]*a{32}/.test(pub.log), "the token never goes to tailscale");
     const priv = run(["rob"]);
-    assert.equal(priv.out, "http://agents.tail.ts.net:8791/" + "a".repeat(48));
+    assert.equal(priv.out, "http://agents.tail.ts.net:8791/" + "a".repeat(48), priv.err + " status=" + priv.status);
     assert.ok(!/funnel|INLOG_FUNNEL/.test(priv.log), "Rob stays tailnet-only");
     assert.match(run(["anna", "--tailnet"]).out, /^http:\/\//);
     const busy = run(["anna"], { FUNNEL_STATUS: "https://x.ts.net:8443 (Funnel on)" });
