@@ -30,6 +30,9 @@ EOF
 cat > "$HOME/.config/systemd/user/usage-herstel@.service" <<EOF
 [Unit]
 Description=Measuring Chromes back after %i
+# Without this the target waits for this oneshot, which waits for the Chromes, which wait for
+# the target: no Chrome started after a boot (10-11-2026).
+After=graphical-session.target
 
 [Service]
 Type=oneshot

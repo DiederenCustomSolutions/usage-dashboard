@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.33.1] — 2026-11-10
+
+- **The measuring Chromes start again after the agents-pc restarts.** The repair check from 0.33.0 held up the start of the desktop session, and with it the Chromes of Rob and Raimond, until it timed out after 45 minutes. It now runs once the session is up. Rerun `agent-api/install.sh` on the agents-pc.
+
 ## [0.33.0] — 2026-11-04
 
 - **The measuring Chromes repair themselves.** After the agents-pc starts, a one-off check on the agents-pc verifies that all four run and really measure, and restarts them when they do not. After a Chrome update they are restarted once apt is done, because Chrome otherwise relaunches itself outside its service and without the extension. There is no timer; both run once on their event. Telegram only when a start needed a repair, or when the repair failed. `agent-api/install.sh` installs it.
