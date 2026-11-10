@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.34.0] — 2026-11-10
+
+- **A logged-out account gets a "Log in" button.** The tile of an account that says "check if logged in" asks the agents-pc for a login link to that measuring Chrome. The tile then shows "Open login" and a copy button; the link works only on devices in the tailnet and for 30 minutes. `usage-api` listens on one stream on the shared `meta` node (push, no timer) and starts `usage-inloglink`, which is now in `agent-api/`. Rerun `agent-api/install.sh` on the agents-pc.
+
 ## [0.33.1] — 2026-11-10
 
 - **The measuring Chromes start again after the agents-pc restarts.** The repair check from 0.33.0 held up the start of the desktop session, and with it the Chromes of Rob and Raimond, until it timed out after 45 minutes. It now runs once the session is up. Starting Kevin's Chromes during a repair is retried when it fails once. Rerun `agent-api/install.sh` on the agents-pc.

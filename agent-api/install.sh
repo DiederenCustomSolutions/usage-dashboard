@@ -11,6 +11,14 @@ if [ ! -f "$CONF/token" ]; then
     (umask 077; node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("hex"))' > "$CONF/token")
 fi
 chmod 600 "$CONF/token"
+# Login links (v0.34.0): add the profile map to an existing config, keep everything else.
+node -e '
+const fs=require("fs"),[,c,e]=process.argv,cfg=JSON.parse(fs.readFileSync(c,"utf8")),ex=JSON.parse(fs.readFileSync(e,"utf8"));
+if(!cfg.inlog_profielen){cfg.inlog_profielen=ex.inlog_profielen;cfg.inlog_min=ex.inlog_min;fs.writeFileSync(c,JSON.stringify(cfg,null,2)+"\n")}
+' "$CONF/config.json" "$HERE/config.example.json"
+# The login link script runs from the repo; keep the old ~/bin name as a link.
+chmod +x "$HERE/usage-inloglink"
+mkdir -p "$HOME/bin"; ln -sf "$HERE/usage-inloglink" "$HOME/bin/usage-inloglink"
 node "$HERE/read-sync-key.mjs" "${CDP_PORT:-9233}" "$CONF/sync.json"
 
 mkdir -p "$HOME/.config/systemd/user"

@@ -1,0 +1,19 @@
+#!/bin/bash
+# usage-inloglink <rob|raimond|kevin|kevin-lxdg> [minuten]: login link for one measuring Chrome.
+# Tailnet only, secret token, stops by itself (default 30 min). Rob, 10-11-2026. Code: usage-inloglink.mjs next to this script (agent-api/ in the repo)
+set -euo pipefail
+p="${1:-}"; m="${2:-30}"
+declare -A POORT=([rob]=8791 [raimond]=8792 [kevin]=8793 [kevin-lxdg]=8794)
+[ -n "${POORT[$p]:-}" ] || { echo "Gebruik: usage-inloglink rob|raimond|kevin|kevin-lxdg [minuten]"; exit 2; }
+t=$(openssl rand -hex 24)
+systemctl --user stop "usage-inloglink-$p" 2>/dev/null || true
+systemd-run --user --quiet --collect --unit="usage-inloglink-$p" --setenv=INLOG_TOKEN="$t" \
+    --property=RuntimeMaxSec=$((m * 60 + 60)) node "$(dirname "$(readlink -f "$0")")/usage-inloglink.mjs" "$p" "$m"
+host=$(tailscale status --json | python3 -c 'import sys,json; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    journalctl --user -u "usage-inloglink-$p" -n 3 --no-pager -o cat | grep -q "actief op" && break
+    systemctl --user is-active --quiet "usage-inloglink-$p" || break
+    sleep 1
+done
+systemctl --user is-active --quiet "usage-inloglink-$p" || { journalctl --user -u "usage-inloglink-$p" -n 5 --no-pager -o cat; exit 1; }
+echo "http://$host:${POORT[$p]}/$t"

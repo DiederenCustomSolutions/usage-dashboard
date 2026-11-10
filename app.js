@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.33.1";
+const APP_VERSION = "0.34.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -277,6 +277,9 @@ let state = {
     // Multi-profile: slaat alle profielen op uit de cloud bin
     // { "pid-abc1": { label, syncStatus, lastSeen }, ... }
     cloudProfiles: {},
+    // Login links (v0.34.0): meta.loginRequests / meta.loginLinks, keyed by profile id.
+    loginRequests: {},
+    loginLinks: {},
     // Currently selected profile tab (null = all profiles)
     selectedProfileId: null,
     // GEDEELDE dashboard-configuratie (gesynct via de cloud-bin, niet per apparaat):
@@ -4089,6 +4092,8 @@ function cs2ReadState(config) {
                 refreshClaimedBy: meta.refreshClaimedBy,
                 refreshClaimedAt: meta.refreshClaimedAt,
                 clients: meta.clients || {},   // kijk-apparaten (telefoon/browser) + hun versie
+                loginRequests: meta.loginRequests || {},
+                loginLinks: meta.loginLinks || {},
                 _schema: CS2_SCHEMA
             };
         }
@@ -4599,6 +4604,8 @@ function getAllProfilesForGrid() {
             label: cloud[id].label || id,
             syncStatus: cloud[id].syncStatus || {},
             lastSeen: cloud[id].lastSeen || 0,
+            // Only the "not logged in" error reaches the tile (it gets the Log in button, v0.34.0).
+            lastError: loginErrorNeedsLogin(cloud[id].lastError) ? cloud[id].lastError : undefined,
             isMe: false
         });
     });
@@ -4870,7 +4877,7 @@ function buildSnapshotCard(provider, profile) {
         ? `<span class="card-account-sub">${escapeHtmlSafe(sync.account)}</span>`
         : "";
     const errorInfo = profile.lastError && profile.lastError.provider === provider
-        ? `<div class="sync-status-indicator mb-2" style="color:var(--accent-red);"><i class="fa-solid fa-triangle-exclamation"></i> <span>${escapeHtmlSafe(profile.lastError.message)}</span></div>`
+        ? `<div class="sync-status-indicator mb-2" style="color:var(--accent-red);"><i class="fa-solid fa-triangle-exclamation"></i> <span>${escapeHtmlSafe(profile.lastError.message)}</span>${loginButtonsHTML(profile)}</div>`
         : "";
 
     const sectionsHTML = computeProviderPace(provider, sync, now, monthlySync)
@@ -4916,6 +4923,70 @@ function buildSnapshotCard(provider, profile) {
         </div>
     </div>`;
 }
+
+/* ======================================================================
+   LOG IN-KNOP (v0.34.0)
+   Een tegel met "No data received — check if logged in" krijgt een knop. Klik zet een
+   verzoek in meta.loginRequests[pid] (versleuteld); usage-api op de agents-pc ziet dat via
+   zijn stream, start de inloglink van die meet-Chrome en zet de link in meta.loginLinks[pid].
+   Dan wordt de knop "Open login" (+ kopieer). De link werkt alleen op apparaten in het tailnet.
+   ====================================================================== */
+const LOGIN_REQUEST_MAX_MS = 5 * 60000;   // zoals usage-api: een oud verzoek telt niet meer
+
+function loginErrorNeedsLogin(err) {
+    return !!(err && /check if logged in/i.test(err.message || ""));
+}
+
+// Pure: wat de knop toont. Testbaar zonder DOM.
+function loginButtonState(pid, now, requests, links) {
+    const link = (links || {})[pid], req = (requests || {})[pid];
+    if (link && link.url && link.until > now) return { kind: "ready", url: link.url };
+    if (req && now - req.at < LOGIN_REQUEST_MAX_MS && !(link && link.at >= req.at)) return { kind: "pending" };
+    if (link && link.error && now - link.at < LOGIN_REQUEST_MAX_MS) return { kind: "failed", error: link.error };
+    return { kind: "idle" };
+}
+
+function loginButtonsHTML(profile) {
+    if (!loginErrorNeedsLogin(profile.lastError) || !isSyncClient()) return "";
+    const st = loginButtonState(profile.id, Date.now(), state.loginRequests, state.loginLinks);
+    const pid = escapeHtmlSafe(profile.id);
+    if (st.kind === "pending") return `<button type="button" class="login-btn" disabled><i class="fa-solid fa-spinner fa-spin"></i> Requesting…</button>`;
+    if (st.kind === "ready") return `<button type="button" class="login-btn" data-login-pid="${pid}" data-login-act="open"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open login</button>`
+        + `<button type="button" class="login-btn" data-login-pid="${pid}" data-login-act="copy" title="Copy link"><i class="fa-regular fa-copy"></i></button>`;
+    const label = st.kind === "failed" ? "Retry login" : "Log in";
+    const title = st.kind === "failed" ? ` title="${escapeHtmlSafe(st.error)}"` : "";
+    return `<button type="button" class="login-btn" data-login-pid="${pid}" data-login-act="request"${title}><i class="fa-solid fa-right-to-bracket"></i> ${label}</button>`;
+}
+
+function requestLoginLink(pid) {
+    const cfg = isSyncClient();
+    if (!cfg || !cs2IsFirebase(cfg)) return;
+    const at = Date.now();
+    state.loginRequests = { ...state.loginRequests, [pid]: { at } };
+    updateUI();
+    cs2UpdateEnc(cfg, "meta", (m) => {
+        m.schema = CS2_SCHEMA;
+        m.loginRequests = { ...(m.loginRequests || {}), [pid]: { at } };
+        return m;
+    }).catch(() => {
+        delete state.loginRequests[pid];
+        updateUI();
+        showToast(`<i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-red);"></i> Login request failed.`);
+    });
+}
+
+// Eén gedelegeerde handler: overleeft het hertekenen van de kaarten.
+document.addEventListener("click", (e) => {
+    const btn = e.target.closest && e.target.closest("[data-login-act]");
+    if (!btn) return;
+    const pid = btn.getAttribute("data-login-pid"), act = btn.getAttribute("data-login-act");
+    const link = (state.loginLinks || {})[pid];
+    if (act === "request") requestLoginLink(pid);
+    else if (link && link.url && link.until > Date.now()) {
+        if (act === "open") window.open(link.url, "_blank", "noopener");
+        else navigator.clipboard.writeText(link.url).then(() => showToast(`<i class="fa-solid fa-copy"></i> Login link copied.`)).catch(() => {});
+    }
+});
 
 // Eenvoudige HTML-escape voor labels/resetteksten.
 function escapeHtmlSafe(s) {
@@ -5571,6 +5642,8 @@ function processNormalizedCloudDoc(doc, syncClient, isManual) {
         state.userSettings  = normalizeUserSettings(doc.settings || state.userSettings);
         state.dashboardConfig = normalizeDashboardConfig(doc.dashboardConfig);
         migrateLocalConfigOnce();
+        state.loginRequests = doc.loginRequests || {};
+        state.loginLinks    = doc.loginLinks || {};
         if (doc.profiles && Object.keys(doc.profiles).length > 0) {
             state.cloudProfiles = doc.profiles;
             state.syncStatus    = aggregateProfileSyncStatus(doc.profiles);

@@ -10,6 +10,13 @@
   "betrouwbaar_max_min": 15,
   "ververs_na_min": 5,
   "ververs_vraag_min_s": 120,
+  "inlog_min": 30,
+  "inlog_profielen": {
+    "pid-mufadq04-gpx8xl": "rob",
+    "pid-muf9i094-12cwr6": "raimond",
+    "pid-muqmwdvt-wifr8o": "kevin",
+    "pid-muqnflpt-0g6nuh": "kevin-lxdg"
+  },
   "accounts": [
     { "id": "account1", "naam": "ChatGPT Rob", "eigenaar": "Rob", "dienst": "chatgpt", "abonnement": "team", "profiel": "pid-mufadq04-gpx8xl" },
     { "id": "account2", "naam": "ChatGPT KB PRO", "eigenaar": "Kevin", "dienst": "chatgpt", "abonnement": "prolite", "profiel": "pid-muqmwdvt-wifr8o" },

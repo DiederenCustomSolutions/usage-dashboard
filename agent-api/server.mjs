@@ -182,4 +182,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     // the service does not depend on Tailscale being up before it starts.
     const host = config.adres || "127.0.0.1", port = config.poort || 8787;
     createServer({ config, token, store }).listen(port, host, () => console.log(`usage-api listening on http://${host}:${port}`));
+    // Login links on request: one stream on meta (push); nothing runs without a request.
+    if (config.inlog_profielen && Object.keys(config.inlog_profielen).length) {
+        const { createLoginService } = await import("./inlog.mjs");
+        createLoginService(config, secrets).startStream({ onState: st => console.log(`login stream ${st}`) });
+    }
 }
