@@ -89,8 +89,8 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile } = 
 
     // Same request the dashboard's refresh button makes: meta.refreshRequested(At).
     // Only when meta decrypts to a real object, so a wrong key can never wipe it.
-    async function askRefresh(now) {
-        if (now - lastRefreshAsk < (config.ververs_vraag_min_s ?? 120) * 1000) return;
+    async function askRefresh(now, minS = config.ververs_vraag_min_s ?? 120) {
+        if (now - lastRefreshAsk < minS * 1000) return;
         lastRefreshAsk = now;
         try {
             const { body, etag } = await getJson(url("meta"), 3000, { "X-Firebase-ETag": "true" });
@@ -105,9 +105,31 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile } = 
         } catch (e) { /* the next request asks again */ }
     }
 
-    async function usage(now = Date.now()) {
-        let readOk = true;
-        if (!cache || now - cache.readAt > (config.cache_s ?? 20) * 1000) {
+    const newestOf = profiles => Math.max(0, ...buildUsage(profiles || {}, config, { now: Date.now(), readOk: true, readAt: Date.now() })
+        .accounts.map(a => (a.laatst_gezien ? Date.parse(a.laatst_gezien) : 0)));
+
+    // ?ververs=1 (een knop, zoals Ververs in de werklijst): nu meten en kort wachten op de nieuwe meting.
+    // Alleen op die aanvraag; geen timer. Begrensd: hooguit ververs_wacht_s, lezen elke ververs_lees_ms.
+    async function fresh(now) {
+        let before = 0;
+        try { cache = { profiles: await readProfiles(), readAt: Date.now() }; before = newestOf(cache.profiles); } catch (e) { return false; }
+        await askRefresh(now, config.ververs_knop_min_s ?? 10);
+        const until = Date.now() + (config.ververs_wacht_s ?? 15) * 1000;
+        while (Date.now() < until) {
+            await new Promise(r => setTimeout(r, config.ververs_lees_ms ?? 1500));
+            try {
+                const p = await readProfiles();
+                cache = { profiles: p, readAt: Date.now() };
+                if (newestOf(p) > before) { if (cacheFile) { try { fs.writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 }); } catch (e) {} } return true; }
+            } catch (e) { /* volgende ronde */ }
+        }
+        return false;
+    }
+
+    async function usage(now = Date.now(), { ververs = false } = {}) {
+        let readOk = true, ververst = null;
+        if (ververs) { ververst = await fresh(now); }
+        else if (!cache || now - cache.readAt > (config.cache_s ?? 20) * 1000) {
             try {
                 cache = { profiles: await readProfiles(), readAt: now };
                 if (cacheFile) { try { fs.writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 }); } catch (e) {} }
@@ -115,6 +137,7 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile } = 
         }
         const result = buildUsage(cache ? cache.profiles : {}, config, { now, readOk, readAt: cache ? cache.readAt : now });
         if (!readOk) result.fout = cache ? "database niet bereikbaar; laatste bekende waarden" : "database niet bereikbaar; nog geen waarden";
+        if (ververst !== null) result.ververst = ververst;
         const newest = Math.max(0, ...result.accounts.map(a => (a.laatst_gezien ? Date.parse(a.laatst_gezien) : 0)));
         if (readOk && now - newest > (config.ververs_na_min ?? 5) * 60000) askRefresh(now); // not awaited
         return result;
@@ -158,7 +181,7 @@ export function createServer({ config, token, store, clock = () => Date.now() })
             if (req.method !== "GET") return send(405, { fout: "alleen GET" });
             if (!tokenOk(req.headers.authorization, token)) return send(401, { fout: "token ontbreekt of klopt niet" });
             const now = clock();
-            if (u.pathname === "/v1/usage") return send(200, await store.usage(now));
+            if (u.pathname === "/v1/usage") return send(200, await store.usage(now, { ververs: u.searchParams.get("ververs") === "1" }));
             return send(404, { fout: "onbekend pad; gebruik /v1/usage" });
         } catch (e) {
             send(500, { fout: "interne fout" });

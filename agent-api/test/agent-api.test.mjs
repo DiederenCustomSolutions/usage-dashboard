@@ -121,6 +121,35 @@ test("HTTP: token, JSON, refresh trigger, outage fallback", async () => {
     }
 });
 
+test("HTTP: ?ververs=1 asks right away and waits for the new measurement", async () => {
+    const fb = { profiles: profiles({ seen: NOW - 60000 }), meta: { schema: 2 }, puts: 0, down: false };
+    const fbServer = await fakeFirebase(fb);
+    const cfg = { ...config, cache_s: 0, leestijd_ms: 500, ververs_lees_ms: 50, ververs_wacht_s: 2 };
+    const store = createStore(cfg, { dbUrl: `http://127.0.0.1:${fbServer.address().port}`, binId: "bin", pairingKey: KEY });
+    const server = createServer({ config: cfg, token: TOKEN, store, clock: () => NOW });
+    const port = await listen(server);
+    const get = p => fetch(`http://127.0.0.1:${port}${p}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    try {
+        // Fresh data (1 min): a plain read asks nothing.
+        await (await get("/v1/usage")).json();
+        await new Promise(res => setTimeout(res, 100));
+        assert.equal(fb.puts, 0);
+        // The button: asks at once, and answers with the measurement that arrives meanwhile.
+        setTimeout(() => { fb.profiles = profiles({ seen: NOW + 5000, kb: 55 }); }, 200);
+        const u = await (await get("/v1/usage?ververs=1")).json();
+        assert.equal(fb.puts, 1);
+        assert.equal(fb.meta.refreshRequested, true);
+        assert.equal(u.ververst, true);
+        // No new measurement within the wait: answers anyway, ververst false.
+        const t0 = Date.now();
+        const v = await (await get("/v1/usage?ververs=1")).json();
+        assert.equal(v.ververst, false);
+        assert.ok(Date.now() - t0 < 3000);
+    } finally {
+        server.close(); fbServer.close();
+    }
+});
+
 test("repair check: every account must be measured after the moment asked for", async () => {
     const { allMeasuredSince } = await import("../herstel-check.mjs");
     const seen = iso => ({ laatst_gezien: iso });
