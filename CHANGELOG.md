@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.33.2] — 2026-11-12
+
+- **Refresh no longer jumps back to an older figure.** Cloud reads that arrive out of order (stream, refresh button, fast poll, backup poll) could replace a newer measurement with an older one. The dashboard now keeps the newest measurement per profile and provider, and the extension no longer overwrites a newer cloud measurement with an older upload.
+
 ## [0.33.1] — 2026-11-10
 
 - **The measuring Chromes start again after the agents-pc restarts.** The repair check from 0.33.0 held up the start of the desktop session, and with it the Chromes of Rob and Raimond, until it timed out after 45 minutes. It now runs once the session is up. Starting Kevin's Chromes during a repair is retried when it fails once. Rerun `agent-api/install.sh` on the agents-pc.
