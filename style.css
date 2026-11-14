@@ -2923,6 +2923,16 @@ body.auth-view .app-container {
 }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 
+/* ===== Log in-knop (v0.34.0): in de foutregel van een uitgelogde tegel ===== */
+.login-btn {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+    padding: 2px 9px; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; white-space: nowrap; cursor: pointer;
+    color: var(--text-main); background: rgba(255,255,255,0.06); border: 1px solid var(--border-hover);
+}
+.login-btn + .login-btn { margin-left: 4px; }
+.login-btn:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+.login-btn:disabled { opacity: 0.6; cursor: default; }
+
 /* ===== ChatGPT-resets (v0.28.0): knop naast "Last seen" + uitklaplijst ===== */
 .mp-card .card-stats { position: relative; }
 .reset-credits-btn {

@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.34.0] — 2026-11-10
+
+- **A logged-out account gets a "Log in" button.** The tile of an account that says "check if logged in" asks the agents-pc for a login link to that measuring Chrome. The tile then shows "Open login" and a copy button; the link works only on devices in the tailnet and for 30 minutes. `usage-api` listens on one stream on the shared `meta` node (push, no timer) and starts `usage-inloglink`, which is now in `agent-api/`. Rerun `agent-api/install.sh` on the agents-pc.
+
 ## [Unreleased]
 
 - **Usage-api bewaart nieuwe metingen in SQLite-historie**, inclusief resets en ChatGPT-reset-tegoeden. `GET /v1/verloop` leest het verloop per account; geen extra Firebase-lezingen of timers en historieproblemen houden usage-antwoorden niet op.

@@ -160,6 +160,89 @@ test("repair check: every account must be measured after the moment asked for", 
     assert.equal(allMeasuredSince([], since), false);
 });
 
+// ---- Login links on request (v0.34.0) ----
+const PID_RAIMOND = "pid-muf9i094-12cwr6";
+function fakeMetaDb(state) {
+    const sse = new Set();
+    const s = http.createServer((req, res) => {
+        if (!req.url.includes("/meta.json")) { res.writeHead(404); return res.end("null"); }
+        if (req.method === "GET" && req.headers.accept === "text/event-stream") {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.write("event: put\ndata: {\"path\":\"/\",\"data\":null}\n\n");
+            sse.add(res); req.on("close", () => sse.delete(res)); return;
+        }
+        if (req.method === "GET") {
+            res.writeHead(200, { "content-type": "application/json", etag: "e" + state.puts }); return res.end(JSON.stringify({ data: encrypt(JSON.stringify(state.meta), KEY) }));
+        }
+        let b = ""; req.on("data", c => (b += c)); req.on("end", () => {
+            if (state.conflictOnce) { state.conflictOnce = false; res.writeHead(412); return res.end("{}"); }
+            state.meta = JSON.parse(decrypt(JSON.parse(b).data, KEY)); state.puts++;
+            for (const c of sse) c.write("event: put\ndata: {}\n\n");   // own write comes back on the stream
+            res.end("{}");
+        });
+    });
+    return new Promise(r => s.listen(0, "127.0.0.1", () => r({ server: s, sse })));
+}
+const waitFor = async (fn, ms = 2000) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) throw new Error("timeout"); await new Promise(r => setTimeout(r, 20)); } };
+
+test("login link: request becomes an encrypted link, request removed, rest of meta kept", async () => {
+    const { createLoginService, LINK_RE } = await import("../inlog.mjs");
+    const NOW2 = Date.now();
+    const st = { puts: 0, meta: { schema: 2, dashboardConfig: { x: 1 }, loginRequests: { [PID_RAIMOND]: { at: NOW2 - 1000 }, "pid-unknown": { at: NOW2 - 1000 }, "pid-old": { at: NOW2 - 3600e3 } } } };
+    const { server } = await fakeMetaDb(st);
+    const calls = [];
+    const run = async (name, min) => { calls.push([name, min]); return "http://agents.tailnet.ts.net:8792/" + "a".repeat(48); };
+    const svc = createLoginService(config, { dbUrl: `http://127.0.0.1:${server.address().port}`, binId: "bin", pairingKey: KEY }, { run });
+    try {
+        st.conflictOnce = true;   // first write loses the ETag race: must retry from a fresh read
+        await svc.check();
+        assert.deepEqual(calls, [["raimond", 30]]);
+        const l = st.meta.loginLinks[PID_RAIMOND];
+        assert.match(l.url, LINK_RE);
+        assert.equal(l.until - l.at, 30 * 60000);
+        assert.match(st.meta.loginLinks["pid-unknown"].error, /no measuring Chrome/);
+        assert.equal(st.meta.loginLinks["pid-old"], undefined);
+        assert.deepEqual(st.meta.loginRequests, {});
+        assert.deepEqual(st.meta.dashboardConfig, { x: 1 });
+    } finally { server.close(); }
+});
+
+test("login link: failing script gives an error entry, never a half link", async () => {
+    const { createLoginService, runInlogLink } = await import("../inlog.mjs");
+    const st = { puts: 0, meta: { schema: 2, loginRequests: { [PID_RAIMOND]: { at: Date.now() } } } };
+    const { server } = await fakeMetaDb(st);
+    const svc = createLoginService(config, { dbUrl: `http://127.0.0.1:${server.address().port}`, binId: "bin", pairingKey: KEY }, { run: async () => { throw new Error("x"); } });
+    try {
+        await svc.check();
+        assert.match(st.meta.loginLinks[PID_RAIMOND].error, /could not start/);
+        assert.equal(st.meta.loginLinks[PID_RAIMOND].url, undefined);
+    } finally { server.close(); }
+    // Output that is not a tailnet link is refused.
+    await assert.rejects(runInlogLink("rob", 30, { exec: (c, a, o, cb) => cb(null, "oops\nhttp://evil/x\n") }));
+    assert.equal(await runInlogLink("rob", 30, { exec: (c, a, o, cb) => cb(null, "started\nhttp://h.ts.net:8791/" + "b".repeat(48) + "\n") }), "http://h.ts.net:8791/" + "b".repeat(48));
+});
+
+test("login link: the stream triggers the work (push); no request, no run", async () => {
+    const { createLoginService } = await import("../inlog.mjs");
+    const st = { puts: 0, meta: { schema: 2 } };
+    const { server, sse } = await fakeMetaDb(st);
+    const calls = [];
+    const svc = createLoginService(config, { dbUrl: `http://127.0.0.1:${server.address().port}`, binId: "bin", pairingKey: KEY },
+        { run: async n => { calls.push(n); return "http://h.ts.net:8791/" + "c".repeat(48); } });
+    const stream = svc.startStream();
+    try {
+        await waitFor(() => sse.size === 1);
+        await new Promise(r => setTimeout(r, 150));
+        assert.equal(calls.length, 0);                      // initial event, nothing requested
+        st.meta.loginRequests = { [PID_RAIMOND]: { at: Date.now() } };   // what the dashboard writes
+        for (const c of sse) c.write("event: put\ndata: {}\n\n");
+        await waitFor(() => st.meta.loginLinks && st.meta.loginLinks[PID_RAIMOND]);
+        assert.deepEqual(calls, ["raimond"]);
+        await new Promise(r => setTimeout(r, 150));
+        assert.equal(calls.length, 1);                      // its own write on the stream does not run it again
+    } finally { stream.close(); for (const c of sse) c.end(); server.close(); }
+});
+
 // Keep even temporary SQLite files inside the authorized workspace.
 function historyFixture(t, overrides = {}) {
     const dir = fs.mkdtempSync(path.join(here, "historie-test-"));

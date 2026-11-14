@@ -60,6 +60,10 @@ Elke bestaande Firebase-lezing bewaart de metingen ook in SQLite (`node:sqlite`,
 
 Lukt het herstel niet, dan komt er een Telegram-bericht via het profiel `github-it`. Het logboek staat in `journalctl --user -u 'usage-herstel@*'`.
 
+## Inloglink vanuit het dashboard
+
+Een tegel van een uitgelogd account heeft een knop "Log in". Die zet een versleuteld verzoek in `meta.loginRequests`; `usage-api` heeft daarvoor één stream op `meta` (push, geen timer), start `usage-inloglink <profiel>` en zet de link versleuteld in `meta.loginLinks`. De link werkt alleen in het tailnet en 30 minuten. Welk profiel bij welke meet-Chrome hoort, staat in `inlog_profielen` van `config.json`. Handmatig: `usage-inloglink <rob|raimond|kevin|kevin-lxdg> [minuten]`.
+
 ## Installeren en testen
 
 Installeren op de agents-pc:
