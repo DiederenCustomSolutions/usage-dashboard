@@ -1,6 +1,6 @@
 # Usage-leesservice voor agents
 
-Agents vragen hier het actuele verbruik per abonnement op: dezelfde cijfers als het dashboard. Welk account een agent neemt, bepalen de agents zelf (agents-infra); dat hoort niet in deze repo. De service draait op de agents-pc en leest dezelfde gegevens als het dashboard. Je kunt er alleen mee lezen.
+Agents vragen hier het actuele verbruik per abonnement op: dezelfde cijfers als het dashboard. Welk account een agent neemt, bepalen de agents zelf (agents-infra); dat hoort niet in deze repo. De service draait op de agents-pc, leest dezelfde gegevens als het dashboard en bewaart daarnaast centrale verbruikshistorie. Lezen gebruikt het lees-token; inname gebruikt een apart token per pc.
 
 ## Aanroepen
 
@@ -47,17 +47,58 @@ Is de nieuwste meting ouder dan 5 minuten, dan vraagt de service de meet-Chromes
 
 ## Historie
 
-Elke bestaande Firebase-lezing bewaart de metingen ook in SQLite (`node:sqlite`, zonder extra pakketten), standaard in `historie.sqlite` naast de config. Met `historie_bestand` kies je een ander pad, op dezelfde manier als `cache_bestand`. Het bestand groeit alleen als `laatst_gezien` voor een account nieuwer is dan de laatst opgeslagen meting; bestaande regels worden nooit aangepast of gewist. Ook de resets en ChatGPT-reset-tegoeden met vervaldata blijven bewaard.
+Elke bestaande Firebase-lezing bewaart de metingen ook in SQLite (`node:sqlite`, zonder extra pakketten), standaard in `historie.sqlite` naast de config. Met `historie_bestand` kies je een ander pad, op dezelfde manier als `cache_bestand`. Een Firebase-meting wordt toegevoegd als `laatst_gezien` nieuwer is dan de vorige niet-Codex-meting van dat account; een later opgenomen Codex-meting blokkeert die niet. Bestaande regels worden nooit aangepast of gewist. Ook de resets en ChatGPT-reset-tegoeden met vervaldata blijven bewaard.
 
 `GET /v1/verloop?account=account1&sinds=2026-11-01T00:00:00Z&max=500` geeft `{ metingen: [...] }`, nieuwste `laatst_gezien` eerst. Alle filters zijn optioneel; `sinds` is inclusief en `max` is standaard 500. Het endpoint gebruikt dezelfde token- en adrescontrole als `/v1/usage`. Zonder beschikbare historie is het antwoord `{ metingen: [], fout: "geen historie" }`. SQLite draait in een worker; fouten daarin laten `/v1/usage` gewoon antwoorden. Er komt geen timer, poll of extra Firebase-lezing bij.
 
-### Centrale inname en back-up
+## Centrale database
+
+SQLite draait uitsluitend in één worker-thread. De tabellen zijn:
+
+| Tabel | Inhoud |
+| --- | --- |
+| `metingen` | Limietpercentages, resets en reset-tegoeden per account; ook Codex-metingen |
+| `berichten` | Claude-berichten met model, sessie, titel/project, tokens en prijs; uniek op `id` |
+| `codex` | Codex-tokenregels met account, werkmap, tokens, USD en limietpercentages; uniek op `id` |
+| `klussen` | Opeenvolgende klusstanden; ontdubbeld via een vingerafdruk van de inhoud |
+| `inname_log` | Audit per blok: pc, tabel, tijd, ontvangen/nieuwe regels en positie |
 
 `node agent-api/inname-token.mjs <pc>` maakt een inname-token voor een pc-naam van 1–32 kleine letters, cijfers of streepjes. Het token verschijnt één keer op stdout; bewaar het veilig. Alleen de SHA-256-hash komt in `inname.json` naast de config (modus 0600). Opnieuw uitvoeren vervangt het token voor die pc. `USAGE_API_CONFIG` kiest de config; `inname_bestand` kiest een ander tokenbestand. De dienst leest wijzigingen bij de volgende inname, zonder herstart of timer.
 
 `POST /v1/inname` gebruikt dit pc-token als Bearer-token en dezelfde adrescontrole als de lees-endpoints. Stuur JSON met `tabel` (`berichten`, `codex` of `klussen`), `rijen` (1–5000 objecten met een niet-leeg tekstveld `id`) en optioneel `positie` (geheel getal ≥ 0). De body mag maximaal 8 MiB zijn. De dienst vult `pc` en `ontvangen_op` zelf in en negeert onbekende kolommen. Antwoord: `{ "ok": true, "tabel": "codex", "ontvangen": 2, "nieuw": 2, "positie": null, "backup": "2026-11-14" }`. Herhalen voegt dezelfde regels niet nogmaals toe; klusstanden worden via hun inhoud ontdubbeld. Zonder beschikbare historie volgt HTTP 503. Het lees-token geeft geen toegang tot inname.
 
-De eerste schrijfactie van elke UTC-dag maakt na de transactie een SQLite-back-up, standaard in `~/.local/share/usage-api/backup/usage-JJJJ-MM-DD.sqlite`. `backup_map` kiest een andere map. Relatieve paden voor `backup_map` en `inname_bestand` worden naast de config opgelost. Bestaande dagbestanden blijven staan; back-ups met een bestandstijd ouder dan 14 dagen worden opgeruimd. Een back-upfout wordt één regel op stderr en houdt de inname niet tegen. Nieuwe Codex-regels leveren ook historie met bron `codex` op als hun limietpercentages afwijken van de vorige Codex-meting van dat account, inclusief oudere tijden en een weekreset naar nul.
+Voorbeeldbody (ontbrekende kolommen worden `null`):
+
+```json
+{"tabel":"codex","positie":42,"rijen":[{"id":"logregel-42","tijd":"2026-11-14T10:00:00Z","account":"account1","werkmap":"C:\\werk\\app","model":"sol","input":100,"cached_input":40,"output":20,"reasoning":5,"usd":0.0123,"week_pct":30}]}
+```
+
+Deze vier leesendpoints gebruiken hetzelfde lees-token en dezelfde adrescontrole als `/v1/usage`. Een pc-token geeft hier geen toegang.
+
+| Endpoint | Parameters en antwoord |
+| --- | --- |
+| `GET /v1/verbruik` | `van`, `tot`: geldige UTC-dagen (`JJJJ-MM-DD`), beide inclusief, maximaal 400 dagen. Standaard `tot` vandaag UTC en `van` zes dagen eerder. `groep`: komma-lijst uit `dag,account,model,klus`, standaard `dag,account`. `bron`: optioneel `claude` of `codex`. Antwoord: `van`, `tot`, `groep[]`, `rijen[]`, oplopend gesorteerd op de gekozen velden en bron. |
+| `GET /v1/klussen` | `sinds`: optioneel ISO-tijdstip met tijdzone, inclusief filter op `start`. `max`: 1–1000, standaard 100. Antwoord `klussen[]`: per id de nieuwste stand (grootste `rij`), nieuwste start eerst. Velden: `id`, `pc`, `klusmap`, `account`, `model`, `start`, `eind`, `week_voor`, `week_na`, `vijf_uur_voor`, `vijf_uur_na`, `input`, `output`, `usd`, `pr`, `exitcode`, `gelukt`, `status`. |
+| `GET /v1/verloop` | `account`, `sinds` (ISO-tijdstip met tijdzone, inclusief), `max` (positief geheel getal, standaard 500), `bron` (bijvoorbeeld `codex` of `api`): alle filters optioneel. Antwoord `metingen[]`, nieuwste `laatst_gezien` eerst. Zonder bronfilter komen ook Codex-metingen mee. |
+| `GET /v1/backup` | Geen parameters. Nieuwste `usage-JJJJ-MM-DD.sqlite` als gzip-stroom: `Content-Type: application/gzip`, `X-Backup-Datum: JJJJ-MM-DD`. Geen bestand: HTTP 404 met `{"fout":"geen back-up"}`. |
+
+Elke verbruiksrij bevat de gekozen groepvelden plus `bron`, `regels`, `input`, `output`, `cache_lees`, `cache_schrijf` en `usd` (vier decimalen afgerond). Claude krijgt account `claude` en klus `titel`, of `project` als de titel `null` is; cache-schrijven telt de 5m- en 1u-tokens op. Bij Codex is de klus de mapnaam na de laatste `/` of `\`, output is inclusief reasoning en cache-lezen is `cached_input`. Ontbrekende aantallen tellen als nul. De bronnen blijven altijd apart gegroepeerd.
+
+Voorbeeld `/v1/verbruik?van=2026-11-14&tot=2026-11-14`:
+
+```json
+{"van":"2026-11-14","tot":"2026-11-14","groep":["dag","account"],"rijen":[{"dag":"2026-11-14","account":"account1","bron":"codex","regels":1,"input":100,"output":25,"cache_lees":40,"cache_schrijf":0,"usd":0.0123}]}
+```
+
+Voorbeeld `/v1/verloop?account=account1&bron=codex&max=1`:
+
+```json
+{"metingen":[{"id":1,"gelezen_op":"2026-11-14T10:01:00.000Z","account":"account1","dienst":"chatgpt","laatst_gezien":"2026-11-14T10:00:00Z","vijf_uur_pct":null,"vijf_uur_reset":null,"week_pct":30,"week_reset":null,"bron":"codex","reset_tegoeden":null,"reset_tegoeden_json":null}]}
+```
+
+Ongeldige parameters geven HTTP 400, een ontbrekend/verkeerd lees-token HTTP 401. Bij onbeschikbare historie geven `/v1/verbruik` en `/v1/klussen` HTTP 503; `/v1/verloop` behoudt zijn bestaande antwoord met `metingen: []` en `fout: "geen historie"`.
+
+De eerste schrijfactie van elke UTC-dag maakt na de transactie een SQLite-back-up, standaard in `~/.local/share/usage-api/backup/usage-JJJJ-MM-DD.sqlite`. `backup_map` kiest een andere map. Relatieve paden voor `backup_map` en `inname_bestand` worden naast de config opgelost; `~` in een ingestelde waarde wordt niet uitgevouwen, dus gebruik een absoluut pad of laat de standaard gelden. `install.sh` maakt de back-upmap (0700) en een leeg `inname.json` (0600) aan als ze ontbreken. Bestaande dagbestanden blijven staan; back-ups met een bestandstijd ouder dan 14 dagen worden opgeruimd. Download via `/v1/backup`; het inname-antwoord noemt de back-updatum (of `null` als er geen is). Een back-upfout wordt één regel op stderr en houdt de inname niet tegen. Nieuwe Codex-regels leveren ook historie met bron `codex` op als hun limietpercentages afwijken van de vorige Codex-meting van dat account, inclusief oudere tijden en een weekreset naar nul.
 
 ## Herstel van de meet-Chromes
 

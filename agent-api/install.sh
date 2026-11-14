@@ -6,6 +6,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$HERE")"
 CONF="$HOME/.config/usage-api"
 mkdir -p "$CONF"; chmod 700 "$CONF"
+if [ ! -d "$HOME/.local/share/usage-api/backup" ]; then
+    (umask 077; mkdir -p "$HOME/.local/share/usage-api/backup")
+    chmod 700 "$HOME/.local/share/usage-api/backup"
+fi
+if [ ! -e "$CONF/inname.json" ]; then
+    (umask 077; printf '%s\n' '{"pcs":{}}' > "$CONF/inname.json")
+fi
 
 [ -f "$CONF/config.json" ] || cp "$HERE/config.example.json" "$CONF/config.json"
 if [ ! -f "$CONF/token" ]; then
@@ -117,3 +124,4 @@ systemctl --user enable --now usage-api.service
 systemctl --user restart usage-api.service
 sleep 1
 systemctl --user --no-pager --lines=3 status usage-api.service | head -5
+echo "Pc-token aanmaken: node \"$HERE/inname-token.mjs\" <pc>"

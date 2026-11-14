@@ -12,9 +12,13 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
+import { once } from "node:events";
+import { pipeline } from "node:stream/promises";
+import { createGzip } from "node:zlib";
 import { pcVoorToken } from "./inname-token.mjs";
 
 const HOME = os.homedir();
+const DEFAULT_BACKUP_MAP = path.join(HOME, ".local", "share", "usage-api", "backup");
 export const DEFAULT_CONFIG_PATH = process.env.USAGE_API_CONFIG || path.join(HOME, ".config", "usage-api", "config.json");
 
 // Same XOR + base64 scheme as CryptoSync in app.js / background.js.
@@ -133,6 +137,8 @@ function createHistory(historyFile, config, backupMap) {
             } catch (error) { fail(error); }
         },
         verloop: (options = {}) => request({ type: "verloop", ...options }),
+        verbruik: (options) => request({ type: "verbruik", ...options }),
+        klussen: (options = {}) => request({ type: "klussen", ...options }),
         inname: (options) => request({ type: "inname", ...options }),
         async close() {
             if (!worker || disabled) { await stopping; return; }
@@ -235,7 +241,7 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile, his
         if (readOk && now - newest > (config.ververs_na_min ?? 5) * 60000) askRefresh(now); // not awaited
         return result;
     }
-    return { usage, verloop: history.verloop, inname: history.inname, close: history.close };
+    return { usage, verloop: history.verloop, verbruik: history.verbruik, klussen: history.klussen, inname: history.inname, close: history.close };
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +290,28 @@ async function readInname(req) {
     return { body };
 }
 
-export function createServer({ config, token, store, innameFile = config.inname_bestand, clock = () => Date.now() }) {
+const isoTimestamp = value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value));
+const utcDay = value => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+
+async function sendBackup(res, backupMap, send) {
+    let entries;
+    try { entries = await fs.promises.readdir(backupMap, { withFileTypes: true }); }
+    catch (error) {
+        if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
+        entries = [];
+    }
+    const latest = entries.filter(e => e.isFile() && /^usage-\d{4}-\d{2}-\d{2}\.sqlite$/.test(e.name))
+        .map(e => e.name).sort().at(-1);
+    if (!latest) return send(404, { fout: "geen back-up" });
+    const stream = fs.createReadStream(path.join(backupMap, latest));
+    // Open before sending headers, so an unreadable file still gives a JSON error.
+    await once(stream, "open");
+    res.writeHead(200, { "Content-Type": "application/gzip", "Cache-Control": "no-store", "X-Backup-Datum": latest.slice(6, 16) });
+    await pipeline(stream, createGzip(), res);
+}
+
+export function createServer({ config, token, store, innameFile = config.inname_bestand,
+    backupMap = config.backup_map ?? DEFAULT_BACKUP_MAP, clock = () => Date.now() }) {
     let inname = { pcs: {} }, innameMtime = -Infinity;
     function reloadInname() {
         if (!innameFile) return;
@@ -322,18 +349,45 @@ export function createServer({ config, token, store, innameFile = config.inname_
             if (!tokenOk(req.headers.authorization, token)) return send(401, { fout: "token ontbreekt of klopt niet" });
             const now = clock();
             if (u.pathname === "/v1/usage") return send(200, await store.usage(now, { ververs: u.searchParams.get("ververs") === "1" }));
+            if (u.pathname === "/v1/backup") return await sendBackup(res, backupMap, send);
+            if (u.pathname === "/v1/verbruik") {
+                const tot = u.searchParams.get("tot") ?? new Date(now).toISOString().slice(0, 10);
+                if (!utcDay(tot)) return send(400, { fout: "van en tot moeten geldige UTC-dagen zijn (JJJJ-MM-DD)" });
+                const van = u.searchParams.get("van") ?? new Date(Date.parse(tot) - 6 * 86400e3).toISOString().slice(0, 10);
+                if (!utcDay(van) || van > tot || (Date.parse(tot) - Date.parse(van)) / 86400e3 >= 400) {
+                    return send(400, { fout: "ongeldige periode; gebruik UTC-dagen en maximaal 400 dagen inclusief" });
+                }
+                const groep = [...new Set((u.searchParams.get("groep") ?? "dag,account").split(","))];
+                if (groep.some(field => !["dag", "account", "model", "klus"].includes(field))) return send(400, { fout: "groep moet dag, account, model of klus bevatten" });
+                const bron = u.searchParams.get("bron");
+                if (bron !== null && !["claude", "codex"].includes(bron)) return send(400, { fout: "bron moet claude of codex zijn" });
+                const result = await store.verbruik({ van, tot, groep, bron });
+                if (result.fout) return send(503, { fout: "historie niet beschikbaar" });
+                return send(200, { van, tot, groep, rijen: result.rijen });
+            }
+            if (u.pathname === "/v1/klussen") {
+                const since = u.searchParams.get("sinds");
+                const limit = u.searchParams.get("max");
+                const max = limit === null ? 100 : Number(limit);
+                if (limit !== null && (!/^\d+$/.test(limit) || !Number.isSafeInteger(max) || max < 1 || max > 1000)) return send(400, { fout: "max moet een geheel getal van 1 tot 1000 zijn" });
+                if (since !== null && (!isoTimestamp(since) || !utcDay(since.slice(0, 10)))) return send(400, { fout: "sinds moet een ISO-tijdstip met tijdzone zijn" });
+                const result = await store.klussen({ sinds: since === null ? null : new Date(since).toISOString(), max });
+                if (result.fout) return send(503, { fout: "historie niet beschikbaar" });
+                return send(200, result);
+            }
             if (u.pathname === "/v1/verloop") {
                 const account = u.searchParams.get("account");
                 const since = u.searchParams.get("sinds");
                 const limit = u.searchParams.get("max");
                 const max = limit === null ? 500 : Number(limit);
                 if (limit !== null && (!/^\d+$/.test(limit) || !Number.isSafeInteger(max) || max < 1)) return send(400, { fout: "max moet een positief geheel getal zijn" });
-                if (since !== null && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i.test(since) || !Number.isFinite(Date.parse(since)))) return send(400, { fout: "sinds moet een ISO-tijdstip met tijdzone zijn" });
-                return send(200, await store.verloop({ account, sinds: since === null ? null : new Date(since).toISOString(), max }));
+                if (since !== null && !isoTimestamp(since)) return send(400, { fout: "sinds moet een ISO-tijdstip met tijdzone zijn" });
+                return send(200, await store.verloop({ account, sinds: since === null ? null : new Date(since).toISOString(), max, bron: u.searchParams.get("bron") }));
             }
-            return send(404, { fout: "onbekend pad; gebruik /v1/usage of /v1/verloop" });
+            return send(404, { fout: "onbekend pad; gebruik /v1/usage, /v1/verloop, /v1/verbruik, /v1/klussen, /v1/backup, POST /v1/inname" });
         } catch (e) {
-            send(500, { fout: "interne fout" });
+            if (res.headersSent) res.destroy();
+            else if (!res.destroyed) send(500, { fout: "interne fout" });
         }
     });
 }
@@ -347,7 +401,7 @@ export function loadAll(configPath = DEFAULT_CONFIG_PATH) {
     return {
         config, secrets, token, cacheFile: resolve(config.cache_bestand || "cache.json"),
         historyFile: resolve(config.historie_bestand || "historie.sqlite"),
-        backupMap: config.backup_map ? resolve(config.backup_map) : path.join(HOME, ".local", "share", "usage-api", "backup"),
+        backupMap: config.backup_map ? resolve(config.backup_map) : DEFAULT_BACKUP_MAP,
         innameFile: resolve(config.inname_bestand || "inname.json")
     };
 }
@@ -358,7 +412,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     // One listener; with 0.0.0.0 the toegestaan list limits clients (loopback + tailnet), so
     // the service does not depend on Tailscale being up before it starts.
     const host = config.adres || "127.0.0.1", port = config.poort || 8787;
-    createServer({ config, token, store, innameFile }).listen(port, host, () => console.log(`usage-api listening on http://${host}:${port}`));
+    createServer({ config, token, store, innameFile, backupMap }).listen(port, host, () => console.log(`usage-api listening on http://${host}:${port}`));
     // Login links on request: one stream on meta (push); nothing runs without a request.
     const { loadProfielen } = await import("./profielen.mjs");
     if (loadProfielen().profielen.length) {

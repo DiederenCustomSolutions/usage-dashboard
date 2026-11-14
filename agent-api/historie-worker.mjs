@@ -46,6 +46,8 @@ function fail() {
 try {
     const { DatabaseSync } = await import("node:sqlite");
     db = new DatabaseSync(workerData.bestand, { timeout: 0 });
+    db.function("klusnaam", { deterministic: true }, werkmap => werkmap === null ? null
+        : String(werkmap).replace(/[\\/]+$/, "").split(/[\\/]/).at(-1));
     db.exec(`
         CREATE TABLE IF NOT EXISTS metingen (
             id INTEGER PRIMARY KEY,
@@ -153,13 +155,42 @@ try {
                 dailyBackup();
                 parentPort.postMessage({ id: message.id, result: { nieuw, backup } });
             } else if (message.type === "verloop") {
-                const { account = null, sinds = null, max = 500 } = message;
+                const { account = null, sinds = null, max = 500, bron = null } = message;
                 const where = [], args = [];
                 if (account !== null) { where.push("account = ?"); args.push(account); }
                 if (sinds !== null) { where.push("laatst_gezien >= ?"); args.push(sinds); }
+                if (bron !== null) { where.push("bron = ?"); args.push(bron); }
                 const rows = db.prepare(`SELECT * FROM metingen ${where.length ? "WHERE " + where.join(" AND ") : ""}
                     ORDER BY laatst_gezien DESC, id DESC LIMIT ?`).all(...args, max);
                 parentPort.postMessage({ id: message.id, result: { metingen: rows } });
+            } else if (message.type === "verbruik") {
+                const { van, tot, groep, bron = null } = message;
+                // Only fixed column names enter SQL; all filter values are bound.
+                const fields = groep.filter(field => ["dag", "account", "model", "klus"].includes(field));
+                const group = [...fields, "bron"].join(", ");
+                const rows = db.prepare(`WITH verbruik AS (
+                    SELECT substr(tijd, 1, 10) AS dag, 'claude' AS account, model,
+                        COALESCE(titel, project) AS klus, 'claude' AS bron, input, output, cache_lees,
+                        COALESCE(cache_schrijf_5m, 0) + COALESCE(cache_schrijf_1u, 0) AS cache_schrijf, prijs AS usd
+                    FROM berichten WHERE substr(tijd, 1, 10) BETWEEN ? AND ?
+                    UNION ALL
+                    SELECT substr(tijd, 1, 10) AS dag, account, model, klusnaam(werkmap) AS klus, 'codex' AS bron,
+                        input, COALESCE(output, 0) + COALESCE(reasoning, 0) AS output, cached_input AS cache_lees,
+                        0 AS cache_schrijf, usd
+                    FROM codex WHERE substr(tijd, 1, 10) BETWEEN ? AND ?
+                ) SELECT ${group}, COUNT(*) AS regels, COALESCE(SUM(input), 0) AS input,
+                    COALESCE(SUM(output), 0) AS output, COALESCE(SUM(cache_lees), 0) AS cache_lees,
+                    COALESCE(SUM(cache_schrijf), 0) AS cache_schrijf, ROUND(COALESCE(SUM(usd), 0), 4) AS usd
+                FROM verbruik ${bron === null ? "" : "WHERE bron = ?"}
+                GROUP BY ${group} ORDER BY ${group}`).all(van, tot, van, tot, ...(bron === null ? [] : [bron]));
+                parentPort.postMessage({ id: message.id, result: { rijen: rows } });
+            } else if (message.type === "klussen") {
+                const { sinds = null, max = 100 } = message;
+                const rows = db.prepare(`SELECT id, pc, ${columns.klussen.slice(1).join(", ")} FROM klussen
+                    WHERE rij IN (SELECT MAX(rij) FROM klussen GROUP BY id)
+                    ${sinds === null ? "" : "AND julianday(start) >= julianday(?)"}
+                    ORDER BY julianday(start) DESC, rij DESC LIMIT ?`).all(...(sinds === null ? [] : [sinds]), max);
+                parentPort.postMessage({ id: message.id, result: { klussen: rows } });
             } else if (message.type === "close") {
                 db.close();
                 parentPort.postMessage({ id: message.id, result: null });

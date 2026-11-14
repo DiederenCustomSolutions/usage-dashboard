@@ -248,6 +248,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { pcVoorToken } from "../inname-token.mjs";
 import { Worker } from "node:worker_threads";
+import { gunzipSync } from "node:zlib";
 const tmpDir = () => fs.mkdtempSync(path.join(here, "usage-prof-"));
 const exampleList = () => JSON.parse(fs.readFileSync(path.join(here, "..", "profielen.example.json"), "utf8"));
 
@@ -641,19 +642,22 @@ test("history config paths resolve beside config like cache paths", t => {
 // Central ingestion: real HTTP and a real worker/database, with no Firebase reads.
 const PC_TOKEN = "synthetic-ingestion-token";
 const tokenHash = token => createHash("sha256").update(token).digest("hex");
-async function innameFixture(t, overrides = {}, historyFile) {
+async function innameFixture(t, overrides = {}, historyFile, serverOptions = {}) {
     const f = historyFixture(t, overrides);
     const innameFile = path.join(f.dir, "inname.json");
     fs.writeFileSync(innameFile, JSON.stringify({ pcs: { "test-pc": tokenHash(PC_TOKEN) } }));
     const store = f.makeStore(historyFile);
-    const server = createServer({ config: f.cfg, token: TOKEN, store, innameFile });
+    const server = createServer({ config: f.cfg, token: TOKEN, store, innameFile, ...serverOptions });
     const port = await listen(server);
     t.after(() => new Promise(resolve => server.close(resolve))); f.cleanup();
     const post = (body, token = PC_TOKEN, extra = {}) => fetch(`http://127.0.0.1:${port}/v1/inname`, {
         method: "POST", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
         body: typeof body === "string" ? body : JSON.stringify(body), ...extra
     });
-    return { ...f, store, server, port, innameFile, post };
+    const get = (url, token = TOKEN) => fetch(`http://127.0.0.1:${port}${url}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    return { ...f, store, server, port, innameFile, post, get };
 }
 async function withDatabase(file, fn) {
     const { DatabaseSync } = await import("node:sqlite");
@@ -950,4 +954,263 @@ test("inname-token CLI: random token once, hash only, private mode, replace pc a
     fs.unlinkSync(configPath);
     assert.equal((await run("other-pc")).status, 0);
     assert.equal(fs.existsSync(path.join(dir, "inname.json")), true);
+});
+
+// Read endpoints: use ingestion to exercise the same append-only data as production.
+async function seedVerbruik(f) {
+    const berichten = [
+        { id: "b1", tijd: "2026-11-10T00:00:00Z", model: "fable", titel: "plan", input: 100, output: 10, cache_lees: 20, cache_schrijf_5m: 3, cache_schrijf_1u: 5, prijs: 0.123456 },
+        { id: "b2", tijd: "2026-11-10T12:00:00Z", model: "fable", titel: "plan", input: 50, cache_schrijf_1u: 7, prijs: 0.00005 },
+        { id: "b3", tijd: "2026-11-10T23:59:59Z", model: "nova", titel: null, project: "repo", output: 4, cache_lees: 2, cache_schrijf_5m: 2 },
+        { id: "b4", tijd: "2026-11-11T12:00:00Z" },
+        { id: "b5", tijd: "2026-11-12T23:59:59.999Z", model: "fable", titel: "", project: "geen-fallback", input: 8, output: 9, cache_lees: 1, cache_schrijf_5m: 1, cache_schrijf_1u: 1, prijs: 0.75 },
+        { id: "outside-before", tijd: "2026-11-09T23:59:59Z", input: 999 }
+    ];
+    const codex = [
+        { id: "c1", tijd: "2026-11-10T00:00:00Z", account: "account1", model: "sol", werkmap: "C:\\GitRepos\\build", input: 200, output: 20, reasoning: 7, cached_input: 80, usd: 0.20002 },
+        { id: "c2", tijd: "2026-11-10T12:00:00Z", account: "account1", model: "sol", werkmap: "/home/build", input: 40, reasoning: 3, usd: 0.00004 },
+        { id: "c3", tijd: "2026-11-10T12:00:00Z", account: "claude", model: "sol", werkmap: "/home\\mixed" },
+        { id: "c4", tijd: "2026-11-11T12:00:00Z", account: "account2", model: "luna", werkmap: "/tmp/other/", input: 5, output: 6, cached_input: 2, usd: 1.23456 },
+        { id: "c5", tijd: "2026-11-12T23:59:59.999Z", account: "account1", model: "sol", input: 10, reasoning: 4, cached_input: 3, usd: 0.5 },
+        { id: "outside-after", tijd: "2026-11-13T00:00:00Z", input: 999 }
+    ];
+    for (const [tabel, rijen] of [["berichten", berichten], ["codex", codex]]) {
+        assert.equal((await (await f.post({ tabel, rijen })).json()).nieuw, rijen.length);
+    }
+}
+const verbruikPeriode = "/v1/verbruik?van=2026-11-10&tot=2026-11-12";
+const totals = (regels, input, output, cache_lees, cache_schrijf, usd) => ({ regels, input, output, cache_lees, cache_schrijf, usd });
+
+test("HTTP verbruik: three inclusive UTC days, correct sums, nulls and separate sources", async t => {
+    const f = await innameFixture(t);
+    await seedVerbruik(f);
+    const response = await f.get(verbruikPeriode);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+        van: "2026-11-10", tot: "2026-11-12", groep: ["dag", "account"], rijen: [
+            { dag: "2026-11-10", account: "account1", bron: "codex", ...totals(2, 240, 30, 80, 0, 0.2001) },
+            { dag: "2026-11-10", account: "claude", bron: "claude", ...totals(3, 150, 14, 22, 17, 0.1235) },
+            { dag: "2026-11-10", account: "claude", bron: "codex", ...totals(1, 0, 0, 0, 0, 0) },
+            { dag: "2026-11-11", account: "account2", bron: "codex", ...totals(1, 5, 6, 2, 0, 1.2346) },
+            { dag: "2026-11-11", account: "claude", bron: "claude", ...totals(1, 0, 0, 0, 0, 0) },
+            { dag: "2026-11-12", account: "account1", bron: "codex", ...totals(1, 10, 4, 3, 0, 0.5) },
+            { dag: "2026-11-12", account: "claude", bron: "claude", ...totals(1, 8, 9, 1, 2, 0.75) }
+        ]
+    });
+    const byDay = await (await f.get(`${verbruikPeriode}&groep=dag`)).json();
+    assert.equal(byDay.rijen.length, 6);
+    assert.deepEqual(byDay.rijen.slice(0, 2), [
+        { dag: "2026-11-10", bron: "claude", ...totals(3, 150, 14, 22, 17, 0.1235) },
+        { dag: "2026-11-10", bron: "codex", ...totals(3, 240, 30, 80, 0, 0.2001) }
+    ]);
+    assert.equal(f.state.reads, 0, "read endpoints must not fetch Firebase");
+});
+
+test("HTTP verbruik: all group fields, path styles, source filter and requested sort order", async t => {
+    const f = await innameFixture(t);
+    await seedVerbruik(f);
+    const result = await (await f.get(`${verbruikPeriode}&groep=dag,account,model,klus`)).json();
+    assert.deepEqual(result.groep, ["dag", "account", "model", "klus"]);
+    assert.deepEqual(result.rijen, [
+        { dag: "2026-11-10", account: "account1", model: "sol", klus: "build", bron: "codex", ...totals(2, 240, 30, 80, 0, 0.2001) },
+        { dag: "2026-11-10", account: "claude", model: "fable", klus: "plan", bron: "claude", ...totals(2, 150, 10, 20, 15, 0.1235) },
+        { dag: "2026-11-10", account: "claude", model: "nova", klus: "repo", bron: "claude", ...totals(1, 0, 4, 2, 2, 0) },
+        { dag: "2026-11-10", account: "claude", model: "sol", klus: "mixed", bron: "codex", ...totals(1, 0, 0, 0, 0, 0) },
+        { dag: "2026-11-11", account: "account2", model: "luna", klus: "other", bron: "codex", ...totals(1, 5, 6, 2, 0, 1.2346) },
+        { dag: "2026-11-11", account: "claude", model: null, klus: null, bron: "claude", ...totals(1, 0, 0, 0, 0, 0) },
+        { dag: "2026-11-12", account: "account1", model: "sol", klus: null, bron: "codex", ...totals(1, 10, 4, 3, 0, 0.5) },
+        { dag: "2026-11-12", account: "claude", model: "fable", klus: "", bron: "claude", ...totals(1, 8, 9, 1, 2, 0.75) }
+    ]);
+    for (const bron of ["claude", "codex"]) {
+        const filtered = await (await f.get(`${verbruikPeriode}&groep=dag,account,model,klus&bron=${bron}`)).json();
+        assert.deepEqual(filtered.rijen, result.rijen.filter(row => row.bron === bron));
+    }
+    const byAccount = await (await f.get(`${verbruikPeriode}&groep=account&bron=codex`)).json();
+    assert.deepEqual(byAccount.rijen, [
+        { account: "account1", bron: "codex", ...totals(3, 250, 34, 83, 0, 0.7001) },
+        { account: "account2", bron: "codex", ...totals(1, 5, 6, 2, 0, 1.2346) },
+        { account: "claude", bron: "codex", ...totals(1, 0, 0, 0, 0, 0) }
+    ]);
+    const reordered = await (await f.get(`${verbruikPeriode}&groep=account,dag`)).json();
+    assert.deepEqual(reordered.rijen.map(row => [row.account, row.dag]), [
+        ["account1", "2026-11-10"], ["account1", "2026-11-12"], ["account2", "2026-11-11"],
+        ["claude", "2026-11-10"], ["claude", "2026-11-10"], ["claude", "2026-11-11"], ["claude", "2026-11-12"]
+    ]);
+});
+
+test("HTTP verbruik: default seven-day period uses UTC and tot, empty results and 400-day boundary", async t => {
+    const f = await innameFixture(t, {}, undefined, { clock: () => Date.parse("2026-11-12T23:30:00Z") });
+    await f.post({ tabel: "berichten", rijen: [5, 6, 12, 13].map(day => ({ id: `default-${day}`, tijd: `2026-11-${String(day).padStart(2, "0")}T00:00:00Z` })) });
+    const result = await (await f.get("/v1/verbruik")).json();
+    assert.equal(result.van, "2026-11-06");
+    assert.equal(result.tot, "2026-11-12");
+    assert.deepEqual(result.rijen.map(row => row.dag), ["2026-11-06", "2026-11-12"]);
+    const endOnly = await (await f.get("/v1/verbruik?tot=2026-11-10")).json();
+    assert.equal(endOnly.van, "2026-11-04");
+    assert.equal(endOnly.tot, "2026-11-10");
+    const startOnly = await (await f.get("/v1/verbruik?van=2026-11-10")).json();
+    assert.equal(startOnly.tot, "2026-11-12");
+    assert.deepEqual(startOnly.rijen.map(row => row.dag), ["2026-11-12"]);
+    assert.deepEqual(await (await f.get("/v1/verbruik?van=2026-01-01&tot=2026-01-01")).json(), {
+        van: "2026-01-01", tot: "2026-01-01", groep: ["dag", "account"], rijen: []
+    });
+    const start = days => new Date(Date.parse("2026-11-12") - days * 86400e3).toISOString().slice(0, 10);
+    assert.equal((await f.get(`/v1/verbruik?van=${start(399)}&tot=2026-11-12`)).status, 200);
+    assert.equal((await f.get(`/v1/verbruik?van=${start(400)}&tot=2026-11-12`)).status, 400);
+    assert.equal((await f.get("/v1/verbruik?van=2024-02-29&tot=2024-02-29")).status, 200);
+});
+
+test("HTTP verbruik: invalid dates, reversed or excessive range, unknown groups and sources fail safely", async t => {
+    const f = await innameFixture(t);
+    for (const params of ["van=2026-2-01", "tot=2026-02-30", "van=2026-02-29", "tot=2026-13-01", "tot=wrong", "tot=", "van=", "van=2026-11-13&tot=2026-11-12", "van=2020-01-01&tot=2026-11-12",
+        "groep=", "groep=dag,", "groep=dag,pc", "groep=dag);DROP%20TABLE%20berichten;--", "bron=", "bron=api"]) {
+        assert.equal((await f.get(`/v1/verbruik?${params}`)).status, 400, params);
+    }
+    assert.equal((await f.get(verbruikPeriode)).status, 200, "invalid input must not disable the worker");
+});
+
+test("HTTP klussen: newest snapshot per id, complete fields, start order and inclusive timezone filter", async t => {
+    const f = await innameFixture(t);
+    const job = { id: "job", klusmap: "C:\\werk\\klus", account: "account1", model: "sol", start: "2026-11-10T10:00:00Z", week_voor: 1, vijf_uur_voor: 2, status: "lopend" };
+    const done = { ...job, eind: "2026-11-10T11:00:00Z", week_na: 3, vijf_uur_na: 4, input: 100, output: 10, usd: 1.25, pr: "https://example.invalid/pr/1", exitcode: 0, gelukt: true, status: "klaar" };
+    await f.post({ tabel: "klussen", rijen: [job,
+        { id: "newest-start", start: "2026-11-11T12:00:00Z" }, done,
+        { id: "offset", start: "2026-11-10T10:30:00+01:00" },
+        { id: "changed-start", start: "2026-11-12T12:00:00Z", status: "lopend" },
+        { id: "changed-start", start: "2026-11-01T12:00:00Z", status: "klaar" }
+    ] });
+    const response = await f.get("/v1/klussen");
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.deepEqual(result.klussen.map(row => row.id), ["newest-start", "job", "offset", "changed-start"]);
+    assert.deepEqual(result.klussen[1], { ...done, pc: "test-pc", gelukt: 1 });
+    const since = await (await f.get("/v1/klussen?sinds=2026-11-10T11:00:00%2B01:00")).json();
+    assert.deepEqual(since.klussen.map(row => row.id), ["newest-start", "job"]);
+    assert.equal(since.klussen[1].status, "klaar");
+    assert.deepEqual((await (await f.get("/v1/klussen?max=1")).json()).klussen.map(row => row.id), ["newest-start"]);
+    assert.deepEqual(await (await f.get("/v1/klussen?sinds=2027-01-01T00:00:00Z")).json(), { klussen: [] });
+    assert.equal(f.state.reads, 0);
+});
+
+test("HTTP klussen: default 100, maximum 1000 and invalid limits or timestamps", async t => {
+    const f = await innameFixture(t);
+    assert.deepEqual(await (await f.get("/v1/klussen")).json(), { klussen: [] });
+    await f.post({ tabel: "klussen", rijen: Array.from({ length: 101 }, (_, i) => ({ id: `job-${i}`, start: new Date(NOW + i * 1000).toISOString() })) });
+    const result = await (await f.get("/v1/klussen")).json();
+    assert.equal(result.klussen.length, 100);
+    assert.equal(result.klussen[0].id, "job-100");
+    assert.equal((await (await f.get("/v1/klussen?max=1000")).json()).klussen.length, 101);
+    for (const params of ["max=0", "max=-1", "max=1.5", "max=1001", "max=abc", "max=", "max=9007199254740992", "sinds=", "sinds=invalid", "sinds=2026-11-10", "sinds=2026-11-10T10:00:00", "sinds=2026-13-10T10:00:00Z", "sinds=2026-02-30T10:00:00Z"]) {
+        assert.equal((await f.get(`/v1/klussen?${params}`)).status, 400, params);
+    }
+});
+
+test("HTTP backup: gzip contains committed SQLite data and returns the latest backup date", async t => {
+    const f = await innameFixture(t);
+    await f.post({ tabel: "codex", rijen: [{ id: "downloaded", account: "account1", tijd: "2026-11-10T10:00:00Z", input: 123, week_pct: 42 }] });
+    const day = new Date().toISOString().slice(0, 10);
+    // Unrelated files and matching directories must never be selected.
+    fs.writeFileSync(path.join(f.cfg.backup_map, "usage-9999-12-31.sqlite.tmp"), "ignored");
+    fs.mkdirSync(path.join(f.cfg.backup_map, "usage-9999-12-31.sqlite"));
+    const response = await f.get("/v1/backup");
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "application/gzip");
+    assert.equal(response.headers.get("x-backup-datum"), day);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const bytes = gunzipSync(Buffer.from(await response.arrayBuffer()));
+    assert.equal(bytes.subarray(0, 16).toString(), "SQLite format 3\0");
+    const file = path.join(f.dir, "download.sqlite"); fs.writeFileSync(file, bytes);
+    await withDatabase(file, db => {
+        assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
+        assert.deepEqual({ ...db.prepare("SELECT id, input, pc FROM codex").get() }, { id: "downloaded", input: 123, pc: "test-pc" });
+        assert.equal(db.prepare("SELECT week_pct FROM metingen").get().week_pct, 42);
+        assert.equal(db.prepare("SELECT nieuw FROM inname_log").get().nieuw, 1);
+    });
+    fs.copyFileSync(file, path.join(f.cfg.backup_map, "usage-2000-01-01.sqlite"));
+    const newest = await f.get("/v1/backup");
+    assert.equal(newest.headers.get("x-backup-datum"), day);
+    await newest.arrayBuffer();
+    assert.equal(f.state.reads, 0);
+});
+
+test("HTTP backup: missing or empty directory gives 404 and explicit backupMap overrides config", async t => {
+    const f = await innameFixture(t);
+    for (const makeDirectory of [false, true]) {
+        if (makeDirectory) fs.mkdirSync(f.cfg.backup_map);
+        const response = await f.get("/v1/backup");
+        assert.equal(response.status, 404);
+        assert.deepEqual(await response.json(), { fout: "geen back-up" });
+    }
+    const selected = path.join(f.dir, "selected"); fs.mkdirSync(selected);
+    fs.writeFileSync(path.join(selected, "usage-2026-11-01.sqlite"), "selected backup");
+    const server = createServer({ config: f.cfg, token: TOKEN, store: f.store, backupMap: selected });
+    const port = await listen(server);
+    t.after(() => new Promise(resolve => server.close(resolve)));
+    const response = await fetch(`http://127.0.0.1:${port}/v1/backup`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-backup-datum"), "2026-11-01");
+    assert.equal(gunzipSync(Buffer.from(await response.arrayBuffer())).toString(), "selected backup");
+});
+
+test("HTTP central reads: require the read token, enforce address rules and list all paths in 404", async t => {
+    const f = await innameFixture(t);
+    for (const endpoint of ["/v1/verbruik", "/v1/klussen", "/v1/backup"]) {
+        for (const token of [null, "wrong", PC_TOKEN]) assert.equal((await f.get(endpoint, token)).status, 401, endpoint);
+    }
+    const missing = await f.get("/missing");
+    assert.equal(missing.status, 404);
+    const { fout } = await missing.json();
+    for (const endpoint of ["/v1/usage", "/v1/verloop", "/v1/verbruik", "/v1/klussen", "/v1/backup", "POST /v1/inname"]) assert.ok(fout.includes(endpoint));
+    f.cfg.toegestaan = ["192.0.2.1"];
+    for (const endpoint of ["/v1/verbruik", "/v1/klussen", "/v1/backup"]) assert.equal((await f.get(endpoint)).status, 403);
+});
+
+test("HTTP central reads: unavailable history gives 503 without breaking usage", async t => {
+    const f = await innameFixture(t, {}, null);
+    for (const endpoint of ["/v1/verbruik", "/v1/klussen"]) {
+        const response = await f.get(endpoint);
+        assert.equal(response.status, 503);
+        assert.deepEqual(await response.json(), { fout: "historie niet beschikbaar" });
+    }
+    assert.equal((await f.get("/v1/usage")).status, 200);
+});
+
+test("HTTP verloop: Codex filter combines with account, inclusive sinds and max, Firebase remains separate", async t => {
+    const f = await innameFixture(t);
+    await f.post({ tabel: "codex", rijen: [
+        { id: "first", account: "account1", tijd: "2026-11-10T10:00:00Z", week_pct: 20 },
+        { id: "second", account: "account1", tijd: "2026-11-11T10:00:00Z", week_pct: 21 },
+        { id: "other", account: "account2", tijd: "2026-11-10T10:00:00Z", week_pct: 50 }
+    ] });
+    await f.store.usage(NOW);
+    const codex = await (await f.get("/v1/verloop?bron=codex")).json();
+    assert.equal(codex.metingen.length, 3);
+    assert.ok(codex.metingen.every(row => row.bron === "codex"));
+    const filtered = await (await f.get("/v1/verloop?bron=codex&account=account1&sinds=2026-11-10T10:00:00Z&max=1")).json();
+    assert.equal(filtered.metingen.length, 1);
+    assert.equal(filtered.metingen[0].laatst_gezien, "2026-11-11T10:00:00Z");
+    const inclusive = await (await f.get("/v1/verloop?bron=codex&account=account1&sinds=2026-11-10T10:00:00Z")).json();
+    assert.equal(inclusive.metingen.length, 2);
+    assert.equal((await (await f.get("/v1/verloop?bron=api")).json()).metingen.length, 4);
+    assert.deepEqual(await (await f.get("/v1/verloop?bron=unknown")).json(), { metingen: [] });
+    assert.equal((await (await f.get("/v1/verloop")).json()).metingen.length, 7);
+    assert.equal(f.state.reads, 1, "only the explicit usage call reads Firebase");
+});
+
+test("history bewaar: earlier Firebase reading is saved after a later Codex measurement for the same account", async t => {
+    const f = await innameFixture(t);
+    await f.post({ tabel: "codex", rijen: [{ id: "later", account: "account1", tijd: new Date(NOW + 60000).toISOString(), week_pct: 80 }] });
+    await f.store.usage(NOW);
+    let rows = (await f.store.verloop({ account: "account1" })).metingen;
+    assert.deepEqual(rows.map(row => [row.bron, row.laatst_gezien, row.week_pct]), [
+        ["codex", new Date(NOW + 60000).toISOString(), 80], ["api", new Date(NOW - 60000).toISOString(), 30]
+    ]);
+    // Non-Codex history still prevents duplicate or older Firebase readings.
+    f.state.profiles = profiles({ seen: NOW - 120000, robWeek: 99 });
+    await f.store.usage(NOW + 1);
+    assert.deepEqual((await f.store.verloop({ account: "account1" })).metingen, rows);
+    f.state.profiles = profiles({ seen: NOW, robWeek: 31 });
+    await f.store.usage(NOW + 2);
+    rows = (await f.store.verloop({ account: "account1" })).metingen;
+    assert.deepEqual(rows.map(row => [row.bron, row.week_pct]), [["codex", 80], ["api", 31], ["api", 30]]);
 });
