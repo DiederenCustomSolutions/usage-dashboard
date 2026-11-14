@@ -51,6 +51,14 @@ Elke bestaande Firebase-lezing bewaart de metingen ook in SQLite (`node:sqlite`,
 
 `GET /v1/verloop?account=account1&sinds=2026-11-01T00:00:00Z&max=500` geeft `{ metingen: [...] }`, nieuwste `laatst_gezien` eerst. Alle filters zijn optioneel; `sinds` is inclusief en `max` is standaard 500. Het endpoint gebruikt dezelfde token- en adrescontrole als `/v1/usage`. Zonder beschikbare historie is het antwoord `{ metingen: [], fout: "geen historie" }`. SQLite draait in een worker; fouten daarin laten `/v1/usage` gewoon antwoorden. Er komt geen timer, poll of extra Firebase-lezing bij.
 
+### Centrale inname en back-up
+
+`node agent-api/inname-token.mjs <pc>` maakt een inname-token voor een pc-naam van 1–32 kleine letters, cijfers of streepjes. Het token verschijnt één keer op stdout; bewaar het veilig. Alleen de SHA-256-hash komt in `inname.json` naast de config (modus 0600). Opnieuw uitvoeren vervangt het token voor die pc. `USAGE_API_CONFIG` kiest de config; `inname_bestand` kiest een ander tokenbestand. De dienst leest wijzigingen bij de volgende inname, zonder herstart of timer.
+
+`POST /v1/inname` gebruikt dit pc-token als Bearer-token en dezelfde adrescontrole als de lees-endpoints. Stuur JSON met `tabel` (`berichten`, `codex` of `klussen`), `rijen` (1–5000 objecten met een niet-leeg tekstveld `id`) en optioneel `positie` (geheel getal ≥ 0). De body mag maximaal 8 MiB zijn. De dienst vult `pc` en `ontvangen_op` zelf in en negeert onbekende kolommen. Antwoord: `{ "ok": true, "tabel": "codex", "ontvangen": 2, "nieuw": 2, "positie": null, "backup": "2026-11-14" }`. Herhalen voegt dezelfde regels niet nogmaals toe; klusstanden worden via hun inhoud ontdubbeld. Zonder beschikbare historie volgt HTTP 503. Het lees-token geeft geen toegang tot inname.
+
+De eerste schrijfactie van elke UTC-dag maakt na de transactie een SQLite-back-up, standaard in `~/.local/share/usage-api/backup/usage-JJJJ-MM-DD.sqlite`. `backup_map` kiest een andere map. Relatieve paden voor `backup_map` en `inname_bestand` worden naast de config opgelost. Bestaande dagbestanden blijven staan; back-ups met een bestandstijd ouder dan 14 dagen worden opgeruimd. Een back-upfout wordt één regel op stderr en houdt de inname niet tegen. Nieuwe Codex-regels leveren ook historie met bron `codex` op als hun limietpercentages afwijken van de vorige Codex-meting van dat account, inclusief oudere tijden en een weekreset naar nul.
+
 ## Herstel van de meet-Chromes
 
 `herstel-meetchromes.sh` start één keer per aanleiding, nooit op een timer:

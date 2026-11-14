@@ -17,6 +17,8 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ## [Unreleased]
 
+- Centrale tabellen voor berichten, Codex en klusstanden, `POST /v1/inname` met pc-tokens en een dagelijkse SQLite-back-up.
+
 - **Usage-api bewaart nieuwe metingen in SQLite-historie**, inclusief resets en ChatGPT-reset-tegoeden. `GET /v1/verloop` leest het verloop per account; geen extra Firebase-lezingen of timers en historieproblemen houden usage-antwoorden niet op.
 
 ## [0.33.2] — 2026-11-12

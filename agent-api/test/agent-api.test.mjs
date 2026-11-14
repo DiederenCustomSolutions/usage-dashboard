@@ -244,9 +244,11 @@ test("login link: the stream triggers the work (push); no request, no run", asyn
 });
 
 // ---- v0.35.0: one profile list, "add measuring profile", public login link ----
-import os from "node:os";
 import { spawnSync } from "node:child_process";
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "usage-prof-"));
+import { createHash } from "node:crypto";
+import { pcVoorToken } from "../inname-token.mjs";
+import { Worker } from "node:worker_threads";
+const tmpDir = () => fs.mkdtempSync(path.join(here, "usage-prof-"));
 const exampleList = () => JSON.parse(fs.readFileSync(path.join(here, "..", "profielen.example.json"), "utf8"));
 
 test("profile list: example matches the four live profiles; validation; pids", async () => {
@@ -264,9 +266,10 @@ test("profile list: example matches the four live profiles; validation; pids", a
     }
 });
 
-test("profile list: new ports are the first free ones; add is saved and locked", async () => {
+test("profile list: new ports are the first free ones; add is saved and locked", async t => {
     const P = await import("../profielen.mjs");
     const dir = tmpDir(), file = path.join(dir, "profielen.json");
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     fs.writeFileSync(file, JSON.stringify(exampleList()));
     assert.deepEqual(P.pickPorts(exampleList()), { debugpoort: 9235, webpoort: 8795 });
     assert.deepEqual(P.pickPorts(exampleList(), [9235, 8795]), { debugpoort: 9236, webpoort: 8796 });
@@ -282,15 +285,21 @@ test("profile list: new ports are the first free ones; add is saved and locked",
     assert.ok(!fs.existsSync(path.join(dir, "env", "kevin.env")), "script profiles have no unit env file");
     // CLI used by the shell scripts.
     const env = { ...process.env, USAGE_PROFIELEN: file };
-    const get = (...a) => spawnSync(process.execPath, [path.join(here, "..", "profielen.mjs"), ...a], { env, encoding: "utf8" }).stdout.trim();
+    const get = (...a) => {
+        const result = spawnSync(process.execPath, [path.join(here, "..", "profielen.mjs"), ...a], { env, encoding: "utf8", windowsHide: true });
+        if (result.error) throw result.error;
+        assert.equal(result.status, 0, result.stderr);
+        return result.stdout.trim();
+    };
     assert.equal(get("get", "anna", "webpoort"), "8795");
     assert.equal(get("names", "script").replace(/\r/g, ""), "kevin\nkevin-lxdg");
 });
 
-test("add user: ports, unit with its own debug port, pairing, pid, link; rolls back on failure", async () => {
+test("add user: ports, unit with its own debug port, pairing, pid, link; rolls back on failure", async t => {
     const { addUser, parseArgs } = await import("../usage-gebruiker-toevoegen.mjs");
     const P = await import("../profielen.mjs");
     const dir = tmpDir(), file = path.join(dir, "profielen.json");
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     process.env.USAGE_API_DIR = dir;
     fs.writeFileSync(file, JSON.stringify(exampleList()));
     const http2 = http.createServer((q, r) => r.end("{}"));
@@ -374,8 +383,9 @@ test("runForLink accepts tailnet and Funnel links only", async () => {
     await assert.rejects(runForLink("x", [], { exec: (c, a, o, cb) => cb(Object.assign(new Error("e"), { code: 3 }), "") }), e => e.code === 3);
 });
 
-test("usage-inloglink: public Funnel link only for extern profiles; Funnel off again; token not passed on", () => {
+test("usage-inloglink: public Funnel link only for extern profiles; Funnel off again; token not passed on", t => {
     const dir = tmpDir(), bin = path.join(dir, "bin"), log = path.join(dir, "calls.log");
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     fs.mkdirSync(bin);
     const stub = (name, body) => { fs.writeFileSync(path.join(bin, name), "#!/bin/bash\n" + body + "\n", { mode: 0o755 }); };
     stub("systemctl", "exit 0");
@@ -390,7 +400,8 @@ echo "tailscale $*" >> "${log}"`);
     const file = path.join(dir, "profielen.json"); fs.writeFileSync(file, JSON.stringify(list));
     const run = (args, extra = {}) => {
         fs.writeFileSync(log, "");
-        const r = spawnSync("bash", [path.join(here, "..", "usage-inloglink"), ...args], { encoding: "utf8", env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, USAGE_PROFIELEN: file, FUNNEL_STATUS: "", ...extra } });
+        const r = spawnSync("bash", [path.join(here, "..", "usage-inloglink"), ...args], { encoding: "utf8", windowsHide: true, env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, USAGE_PROFIELEN: file, FUNNEL_STATUS: "", ...extra } });
+        if (r.error) throw r.error;
         return { out: r.stdout.trim(), err: r.stderr, status: r.status, log: fs.readFileSync(log, "utf8") };
     };
     const pub = run(["anna", "120"]);
@@ -413,7 +424,7 @@ echo "tailscale $*" >> "${log}"`);
 function historyFixture(t, overrides = {}) {
     const dir = fs.mkdtempSync(path.join(here, "historie-test-"));
     const state = { profiles: profiles(), reads: 0, metaReads: 0 };
-    const cfg = { ...config, cache_s: 0, ...overrides };
+    const cfg = { ...config, cache_s: 0, backup_map: path.join(dir, "backup"), ...overrides };
     const secrets = { dbUrl: "https://fake.invalid", binId: "bin", pairingKey: KEY };
     const fetchImpl = async (url, options) => {
         if (url.endsWith("/status.json")) {
@@ -427,14 +438,19 @@ function historyFixture(t, overrides = {}) {
         return new Response(JSON.stringify({ data: encrypt(JSON.stringify({ schema: 2 }), KEY) }));
     };
     const historyFile = path.join(dir, "historie.sqlite");
+    const stores = [];
     const makeStore = (file = historyFile) => {
         const store = createStore(cfg, secrets, { fetchImpl, historyFile: file });
+        stores.push(store);
         t.after(() => store.close());
         return store;
     };
     // Hooks run in registration order: register cleanup after store/server hooks.
     return { dir, state, cfg, historyFile, makeStore,
-        cleanup: () => t.after(() => fs.rmSync(dir, { recursive: true, force: true })) };
+        cleanup: () => t.after(async () => {
+            for (const store of stores) await store.close();
+            fs.rmSync(dir, { recursive: true, force: true });
+        }) };
 }
 
 test("history: one row per new account measurement, persistent and append-only", async t => {
@@ -613,8 +629,325 @@ test("history config paths resolve beside config like cache paths", t => {
     const file = path.join(f.dir, "config.json");
     fs.writeFileSync(file, "{}");
     assert.equal(loadAll(file).historyFile, path.join(f.dir, "historie.sqlite"));
+    assert.equal(loadAll(file).innameFile, path.join(f.dir, "inname.json"));
     for (const value of [path.join("subdir", "custom.sqlite"), path.join(f.dir, "absolute.sqlite")]) {
-        fs.writeFileSync(file, JSON.stringify({ historie_bestand: value, cache_bestand: value }));
+        fs.writeFileSync(file, JSON.stringify({ historie_bestand: value, cache_bestand: value, backup_map: value, inname_bestand: value }));
         assert.equal(loadAll(file).historyFile, loadAll(file).cacheFile);
+        assert.equal(loadAll(file).backupMap, loadAll(file).cacheFile);
+        assert.equal(loadAll(file).innameFile, loadAll(file).cacheFile);
     }
+});
+
+// Central ingestion: real HTTP and a real worker/database, with no Firebase reads.
+const PC_TOKEN = "synthetic-ingestion-token";
+const tokenHash = token => createHash("sha256").update(token).digest("hex");
+async function innameFixture(t, overrides = {}, historyFile) {
+    const f = historyFixture(t, overrides);
+    const innameFile = path.join(f.dir, "inname.json");
+    fs.writeFileSync(innameFile, JSON.stringify({ pcs: { "test-pc": tokenHash(PC_TOKEN) } }));
+    const store = f.makeStore(historyFile);
+    const server = createServer({ config: f.cfg, token: TOKEN, store, innameFile });
+    const port = await listen(server);
+    t.after(() => new Promise(resolve => server.close(resolve))); f.cleanup();
+    const post = (body, token = PC_TOKEN, extra = {}) => fetch(`http://127.0.0.1:${port}/v1/inname`, {
+        method: "POST", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
+        body: typeof body === "string" ? body : JSON.stringify(body), ...extra
+    });
+    return { ...f, store, server, port, innameFile, post };
+}
+async function withDatabase(file, fn) {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(file);
+    try { return fn(db); } finally { db.close(); }
+}
+const plainRows = rows => rows.map(row => ({ ...row }));
+
+test("central schema: tables, columns, indexes and version 2 exist before ingestion", async t => {
+    const f = historyFixture(t), store = f.makeStore(); f.cleanup();
+    await store.verloop(); // Barrier: initialization has finished in the worker.
+    await withDatabase(f.historyFile, db => {
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(r => r.name).sort();
+        assert.deepEqual(tables, ["berichten", "codex", "inname_log", "klussen", "metingen"]);
+        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 2);
+        const expected = {
+            berichten: "id pc tijd tijd_eind bron sessie_id titel project model input output cache_lees cache_schrijf_5m cache_schrijf_1u koud subagent prijs ontvangen_op",
+            codex: "id pc tijd account sessie_id werkmap model input cached_input output reasoning usd vijf_uur_pct week_pct ontvangen_op",
+            klussen: "rij vingerafdruk pc id klusmap account model start eind week_voor week_na vijf_uur_voor vijf_uur_na input output usd pr exitcode gelukt status ontvangen_op",
+            inname_log: "rij pc tabel tijd ontvangen nieuw positie"
+        };
+        for (const [table, names] of Object.entries(expected)) {
+            assert.deepEqual(db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name), names.split(" "));
+        }
+        assert.deepEqual(db.prepare("PRAGMA index_info(berichten_tijd)").all().map(r => r.name), ["tijd"]);
+        assert.deepEqual(db.prepare("PRAGMA index_info(codex_account_tijd)").all().map(r => r.name), ["account", "tijd"]);
+    });
+});
+
+test("ingestion: all tables are idempotent, whitelist fields, stamp pc and audit each block", async t => {
+    const f = await innameFixture(t);
+    for (const tabel of ["berichten", "codex", "klussen"]) {
+        const body = { tabel, pc: "forged", positie: 42, rijen: [{ id: `${tabel}-1`, tijd: "2026-11-01T10:00:00Z", pc: "forged", ontvangen_op: "forged", extra: { ignored: true } }] };
+        const first = await f.post(body);
+        assert.equal(first.status, 200);
+        assert.deepEqual(await first.json(), { ok: true, tabel, ontvangen: 1, nieuw: 1, positie: 42, backup: new Date().toISOString().slice(0, 10) });
+        const duplicate = await f.post(body);
+        assert.equal((await duplicate.json()).nieuw, 0);
+        await withDatabase(f.historyFile, db => {
+            const rows = db.prepare(`SELECT * FROM ${tabel}`).all();
+            assert.equal(rows.length, 1);
+            assert.equal(rows[0].pc, "test-pc");
+            assert.ok(Number.isFinite(Date.parse(rows[0].ontvangen_op)));
+            assert.ok(!("extra" in rows[0]));
+            const log = db.prepare("SELECT pc, tabel, ontvangen, nieuw, positie FROM inname_log WHERE tabel = ? ORDER BY rij").all(tabel);
+            assert.deepEqual(plainRows(log), [
+                { pc: "test-pc", tabel, ontvangen: 1, nieuw: 1, positie: 42 },
+                { pc: "test-pc", tabel, ontvangen: 1, nieuw: 0, positie: 42 }
+            ]);
+        });
+    }
+    assert.equal(f.state.reads, 0);
+});
+
+test("jobs: snapshots share an id, fingerprint ignores pc, unknown fields and object key order", async t => {
+    const f = await innameFixture(t);
+    const lopend = { id: "job-1", status: "lopend", model: "sol" };
+    const klaar = { model: "sol", status: "klaar", id: "job-1", exitcode: 0, gelukt: true };
+    assert.equal((await (await f.post({ tabel: "klussen", rijen: [lopend, klaar] })).json()).nieuw, 2);
+    assert.equal((await (await f.post({ tabel: "klussen", rijen: [{ ...lopend, pc: "other", unknown: 1 }, klaar] })).json()).nieuw, 0);
+    await withDatabase(f.historyFile, db => {
+        const rows = db.prepare("SELECT id, status, vingerafdruk, gelukt FROM klussen ORDER BY rij").all();
+        assert.deepEqual(rows.map(r => [r.id, r.status, r.gelukt]), [["job-1", "lopend", null], ["job-1", "klaar", 1]]);
+        assert.notEqual(rows[0].vingerafdruk, rows[1].vingerafdruk);
+        const fields = ["id", "klusmap", "account", "model", "start", "eind", "week_voor", "week_na", "vijf_uur_voor", "vijf_uur_na", "input", "output", "usd", "pr", "exitcode", "gelukt", "status"];
+        assert.equal(rows[0].vingerafdruk, tokenHash(JSON.stringify(fields.map(key => lopend[key] ?? null))));
+    });
+});
+
+test("codex measurements: sort, deduplicate percentages, preserve week reset zero and backfill", async t => {
+    const f = await innameFixture(t);
+    const rows = [73, 73, 0].map((week_pct, i) => ({ id: `c-${i}`, account: "account1", tijd: `2026-11-0${i + 2}T10:00:00Z`, week_pct }));
+    assert.equal((await (await f.post({ tabel: "codex", rijen: [...rows].reverse() })).json()).nieuw, 3);
+    assert.equal((await (await f.post({ tabel: "codex", rijen: rows })).json()).nieuw, 0);
+    let measurements = (await f.store.verloop({ account: "account1" })).metingen;
+    assert.deepEqual(measurements.map(r => [r.laatst_gezien, r.week_pct, r.bron, r.dienst]), [
+        [rows[2].tijd, 0, "codex", "chatgpt"], [rows[0].tijd, 73, "codex", "chatgpt"]
+    ]);
+    const older = { id: "older", account: "account1", tijd: "2026-11-01T10:00:00Z", week_pct: 70 };
+    assert.equal((await (await f.post({ tabel: "codex", rijen: [older] })).json()).nieuw, 1);
+    measurements = (await f.store.verloop({ account: "account1" })).metingen;
+    assert.deepEqual(measurements.map(r => r.week_pct), [0, 73, 70]);
+    // Same percentages at a new timestamp are suppressed; 5h-only and other accounts work.
+    await f.post({ tabel: "codex", rijen: [
+        { ...rows[2], id: "same", tijd: "2026-11-05T10:00:00Z" },
+        { id: "five", account: "account1", tijd: "2026-11-06T10:00:00Z", vijf_uur_pct: 0 },
+        { id: "other-account", account: "account2", tijd: rows[0].tijd, week_pct: 73 },
+        { id: "no-percent", account: "account1", tijd: "2026-11-07T10:00:00Z" }
+    ] });
+    assert.equal((await f.store.verloop({ account: "account1" })).metingen.length, 4);
+    assert.equal((await f.store.verloop({ account: "account2" })).metingen.length, 1);
+});
+
+test("ingestion auth and validation: fail whole invalid requests, block LAN and preserve GET", async t => {
+    const f = await innameFixture(t);
+    const valid = { tabel: "berichten", rijen: [{ id: "valid" }] };
+    for (const token of [null, TOKEN, "wrong"]) assert.equal((await f.post(valid, token)).status, 401);
+    for (const body of ["{", "null", {}, { ...valid, tabel: "metingen" }, { ...valid, tabel: "toString" },
+        { ...valid, rijen: [] }, { ...valid, rijen: Array(5001).fill({ id: "x" }) },
+        { ...valid, rijen: [{ id: "should-not-insert" }, { id: "bad-model", model: { invalid: true } }] },
+        ...[null, [], "x", {}, { id: "" }, { id: null }, { id: 0 }].map(row => ({ ...valid, rijen: [{ id: "should-not-insert" }, row] })),
+        ...[-1, 1.5, "1", null, Number.MAX_SAFE_INTEGER + 1].map(positie => ({ ...valid, positie }))]) {
+        assert.equal((await f.post(body)).status, 400);
+    }
+    assert.equal((await f.post(valid)).status, 200);
+    const read = await fetch(`http://127.0.0.1:${f.port}/v1/verloop`, { headers: { Authorization: `Bearer ${PC_TOKEN}` } });
+    assert.equal(read.status, 401);
+    assert.equal((await f.post(valid, PC_TOKEN, { method: "PUT" })).status, 405);
+    await withDatabase(f.historyFile, db => assert.equal(db.prepare("SELECT count(*) AS n FROM berichten").get().n, 1));
+    f.cfg.toegestaan = ["100.64.0.0/10"];
+    assert.equal((await f.post(valid)).status, 403);
+});
+
+test("ingestion body size: Content-Length and chunked requests are capped at 8 MiB", async t => {
+    const f = await innameFixture(t);
+    const large = JSON.stringify({ tabel: "berichten", rijen: [{ id: "large", titel: "x".repeat(8 * 1024 * 1024) }] });
+    assert.equal((await f.post(large)).status, 413);
+    const response = await new Promise((resolve, reject) => {
+        const req = http.request({ hostname: "127.0.0.1", port: f.port, path: "/v1/inname", method: "POST", headers: { Authorization: `Bearer ${PC_TOKEN}` } }, res => {
+            res.resume(); res.on("end", () => resolve(res.statusCode));
+        });
+        req.on("error", reject);
+        for (let i = 0; i < large.length; i += 65536) req.write(large.slice(i, i + 65536));
+        req.end();
+    });
+    assert.equal(response, 413);
+    assert.equal((await (await f.post({ tabel: "berichten", rijen: [{ id: "small" }] })).json()).nieuw, 1);
+});
+
+test("ingestion tokens reload on a newer file and fail closed on removal or malformed JSON", async t => {
+    const f = await innameFixture(t);
+    const body = { tabel: "berichten", rijen: [{ id: "reload" }] };
+    assert.equal((await f.post(body)).status, 200);
+    const replacement = "synthetic-replacement-token";
+    fs.writeFileSync(f.innameFile, JSON.stringify({ pcs: { "second-pc": tokenHash(replacement) } }));
+    const newer = new Date(Date.now() + 5000); fs.utimesSync(f.innameFile, newer, newer);
+    assert.equal((await f.post(body)).status, 401);
+    assert.equal((await f.post({ ...body, rijen: [{ id: "replacement" }] }, replacement)).status, 200);
+    await withDatabase(f.historyFile, db => assert.equal(db.prepare("SELECT pc FROM berichten WHERE id = 'replacement'").get().pc, "second-pc"));
+    fs.unlinkSync(f.innameFile);
+    assert.equal((await f.post(body, replacement)).status, 401);
+    fs.writeFileSync(f.innameFile, "{");
+    assert.equal((await f.post(body, replacement)).status, 401);
+});
+
+test("ingestion: absent or broken history returns 503 and usage remains available", async t => {
+    for (const mode of ["disabled", "broken"]) await t.test(mode, async t => {
+        const errors = []; t.mock.method(console, "error", line => errors.push(line));
+        const f = await innameFixture(t, {}, mode === "disabled" ? null : path.join(here, "absent-parent", "history.sqlite"));
+        const response = await f.post({ tabel: "berichten", rijen: [{ id: "x" }] });
+        assert.equal(response.status, 503);
+        assert.deepEqual(await response.json(), { fout: "historie niet beschikbaar" });
+        const usage = await fetch(`http://127.0.0.1:${f.port}/v1/usage`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+        assert.equal(usage.status, 200);
+        assert.equal(errors.length, mode === "disabled" ? 0 : 1);
+    });
+});
+
+test("ingestion transaction: database failure rolls back rows, derived measurements and audit together", async t => {
+    const errors = []; t.mock.method(console, "error", line => errors.push(line));
+    const f = await innameFixture(t);
+    await f.store.verloop();
+    await withDatabase(f.historyFile, db => db.exec(`CREATE TRIGGER reject_test_row BEFORE INSERT ON codex
+        WHEN NEW.id = 'reject' BEGIN SELECT RAISE(ABORT, 'synthetic database failure'); END;`));
+    const response = await f.post({ tabel: "codex", rijen: [
+        { id: "first", account: "account1", tijd: "2026-11-01T00:00:00Z", week_pct: 73 },
+        { id: "reject", account: "account1", tijd: "2026-11-02T00:00:00Z", week_pct: 0 }
+    ] });
+    assert.equal(response.status, 503);
+    await withDatabase(f.historyFile, db => {
+        for (const table of ["codex", "metingen", "inname_log"]) {
+            assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0);
+        }
+    });
+    assert.equal(errors.length, 1);
+});
+
+test("daily backup: committed rows, one file per UTC day, 14 day retention and restart", async t => {
+    const f = await innameFixture(t);
+    fs.mkdirSync(f.cfg.backup_map);
+    const old = path.join(f.cfg.backup_map, "usage-2000-01-01.sqlite");
+    const recent = path.join(f.cfg.backup_map, "usage-2000-01-03.sqlite");
+    const untouched = path.join(f.cfg.backup_map, "other.sqlite");
+    for (const [file, age] of [[old, 15], [recent, 13], [untouched, 15]]) {
+        fs.writeFileSync(file, "old backup");
+        const time = new Date(Date.now() - age * 86400e3); fs.utimesSync(file, time, time);
+    }
+    const body = id => ({ tabel: "berichten", rijen: [{ id }] });
+    const first = await (await f.post(body("one"))).json();
+    const day = new Date().toISOString().slice(0, 10);
+    assert.equal(first.backup, day);
+    const target = path.join(f.cfg.backup_map, `usage-${day}.sqlite`);
+    const stat = fs.statSync(target);
+    await withDatabase(target, db => {
+        assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
+        assert.equal(db.prepare("SELECT id FROM berichten").get().id, "one");
+        assert.equal(db.prepare("SELECT nieuw FROM inname_log").get().nieuw, 1);
+    });
+    assert.equal(fs.existsSync(old), false);
+    assert.equal(fs.existsSync(recent), true);
+    assert.equal(fs.existsSync(untouched), true);
+    await f.post(body("two"));
+    assert.equal(fs.statSync(target).mtimeMs, stat.mtimeMs);
+    await f.store.close();
+    const reopened = f.makeStore();
+    const result = await reopened.inname({ tabel: "berichten", pc: "test-pc", rijen: [{ id: "three" }] });
+    assert.equal(result.backup, day);
+    assert.equal(fs.statSync(target).mtimeMs, stat.mtimeMs);
+    assert.equal(fs.readdirSync(f.cfg.backup_map).filter(n => n.startsWith("usage-")).length, 2);
+});
+
+test("daily backup: existing bewaar path backs up its committed measurements", async t => {
+    const f = historyFixture(t), store = f.makeStore(); f.cleanup();
+    await store.usage(NOW);
+    await store.verloop();
+    const target = path.join(f.cfg.backup_map, `usage-${new Date().toISOString().slice(0, 10)}.sqlite`);
+    await withDatabase(target, db => assert.equal(db.prepare("SELECT count(*) AS n FROM metingen").get().n, 4));
+});
+
+test("daily backup failure: write succeeds, diagnostic is one line and only once per day", async t => {
+    const errors = []; t.mock.method(console, "error", line => errors.push(line));
+    const f = await innameFixture(t);
+    fs.writeFileSync(f.cfg.backup_map, "cannot be a directory");
+    for (const id of ["one", "two"]) {
+        const response = await f.post({ tabel: "berichten", rijen: [{ id }] });
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).backup, null);
+    }
+    assert.equal(errors.length, 1);
+    assert.ok(!/[\r\n]/.test(errors[0]));
+    await withDatabase(f.historyFile, db => assert.equal(db.prepare("SELECT count(*) AS n FROM berichten").get().n, 2));
+});
+
+test("migration: old metingen database is extended without changing existing rows", async t => {
+    const f = historyFixture(t);
+    await withDatabase(f.historyFile, db => {
+        db.exec(`CREATE TABLE metingen (
+            id INTEGER PRIMARY KEY, gelezen_op TEXT, account TEXT, dienst TEXT,
+            laatst_gezien TEXT, vijf_uur_pct REAL, vijf_uur_reset TEXT, week_pct REAL,
+            week_reset TEXT, bron TEXT, reset_tegoeden INTEGER, reset_tegoeden_json TEXT,
+            UNIQUE(account, laatst_gezien)
+        ); INSERT INTO metingen (account, laatst_gezien, week_pct, bron) VALUES ('old', '2026-01-01T00:00:00Z', 45, 'api');`);
+    });
+    const store = f.makeStore(); f.cleanup();
+    const rows = (await store.verloop()).metingen;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].week_pct, 45);
+    assert.equal(rows[0].account, "old");
+    await withDatabase(f.historyFile, db => {
+        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 2);
+        assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n, 5);
+    });
+});
+
+test("inname-token CLI: random token once, hash only, private mode, replace pc and custom path", async t => {
+    const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const configPath = path.join(dir, "config.json"), file = path.join(dir, "private", "pcs.json");
+    fs.writeFileSync(configPath, JSON.stringify({ inname_bestand: path.join("private", "pcs.json") }));
+    // Execute the actual CLI entry point in an isolated Node worker, capturing
+    // stdout/stderr without emitting generated credentials into the test report.
+    const run = pc => new Promise((resolve, reject) => {
+        const worker = new Worker(new URL("../inname-token.mjs", import.meta.url), {
+            argv: [pc], env: { ...process.env, USAGE_API_CONFIG: configPath }, stdout: true, stderr: true
+        });
+        let stdout = "", stderr = "";
+        worker.stdout.on("data", chunk => { stdout += chunk; });
+        worker.stderr.on("data", chunk => { stderr += chunk; });
+        worker.on("error", reject);
+        worker.on("exit", status => resolve({ status, stdout, stderr }));
+    });
+    const first = await run("test-pc");
+    assert.equal(first.status, 0); assert.equal(first.stderr, "");
+    assert.ok(/^[a-f0-9]{64}\n$/.test(first.stdout), "one random 32-byte hex token");
+    const contents = fs.readFileSync(file, "utf8");
+    assert.ok(!contents.includes(first.stdout.trim()), "no plaintext credential in file");
+    const saved = JSON.parse(contents);
+    assert.ok(saved.pcs["test-pc"] === tokenHash(first.stdout.trim()), "only SHA-256 is stored");
+    assert.equal(pcVoorToken(`Bearer ${first.stdout.trim()}`, saved), "test-pc");
+    if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    const second = await run("test-pc");
+    assert.equal(second.status, 0);
+    assert.ok(first.stdout !== second.stdout, "rotation creates a fresh token");
+    const rotated = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(pcVoorToken(`Bearer ${first.stdout.trim()}`, rotated), null);
+    assert.equal(pcVoorToken(`bearer ${second.stdout.trim()}`, rotated), "test-pc");
+    for (const pc of ["Bad PC", "a".repeat(33), "../bad", ""]) {
+        const bad = await run(pc);
+        assert.equal(bad.status, 1); assert.equal(bad.stdout, "");
+    }
+    for (const header of [null, "", "Basic x", "Bearer wrong"]) assert.equal(pcVoorToken(header, rotated), null);
+    assert.equal(pcVoorToken(`Bearer ${second.stdout.trim()}`, { pcs: { malformed: "not-hex" } }), null);
+    assert.equal(pcVoorToken("Bearer x", null), null);
+    // No config file: default inname.json is still beside that config path.
+    fs.unlinkSync(configPath);
+    assert.equal((await run("other-pc")).status, 0);
+    assert.equal(fs.existsSync(path.join(dir, "inname.json")), true);
 });
