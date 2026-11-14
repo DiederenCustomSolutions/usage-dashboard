@@ -1,19 +1,58 @@
 #!/bin/bash
-# usage-inloglink <rob|raimond|kevin|kevin-lxdg> [minuten]: login link for one measuring Chrome.
-# Tailnet only, secret token, stops by itself (default 30 min). Rob, 10-11-2026. Code: usage-inloglink.mjs next to this script (agent-api/ in the repo)
+# usage-inloglink <profile> [minutes] [--tailnet]: login link for one measuring Chrome.
+# Names and ports come from the profile list (agent-api/profielen.mjs), nothing is hard-coded here.
+# Default: tailnet only, secret token, stops by itself (30 min).
+# A profile marked extern (its owner is not on the tailnet) gets a PUBLIC link through Tailscale
+# Funnel instead, unless --tailnet is given: 64-hex token, at most 60 min, Funnel is on only while
+# the link runs (the unit switches it off again when it stops, also after a crash).
+# The token is printed only as part of the link on stdout; it is in no log.
 set -euo pipefail
-p="${1:-}"; m="${2:-30}"
-declare -A POORT=([rob]=8791 [raimond]=8792 [kevin]=8793 [kevin-lxdg]=8794)
-[ -n "${POORT[$p]:-}" ] || { echo "Gebruik: usage-inloglink rob|raimond|kevin|kevin-lxdg [minuten]"; exit 2; }
-t=$(openssl rand -hex 24)
+HERE="$(dirname "$(readlink -f "$0")")"
+FUNNEL_PORT=8443
+p=""; m=30; tailnet=0
+for a in "$@"; do
+    case "$a" in
+        --tailnet) tailnet=1 ;;
+        ''|*[!0-9a-z-]*) echo "Usage: usage-inloglink <profile> [minutes] [--tailnet]"; exit 2 ;;
+        [0-9]*) m="$a" ;;
+        *) p="$a" ;;
+    esac
+done
+prof() { node "$HERE/profielen.mjs" get "$p" "$1" 2>/dev/null; }
+[ -n "$p" ] && web=$(prof webpoort) || { echo "Usage: usage-inloglink <profile> [minutes] [--tailnet]"; node "$HERE/profielen.mjs" names | tr '\n' ' '; echo; exit 2; }
+[ "$m" -ge 1 ] 2>/dev/null || { echo "minutes must be a number"; exit 2; }
+extern=$(prof extern)
+funnel=0; [ "$extern" = true ] && [ "$tailnet" = 0 ] && funnel=1
+
+if [ "$funnel" = 1 ]; then
+    [ "$m" -le 60 ] || m=60
+    t=$(openssl rand -hex 32)
+    TS=$(command -v tailscale)
+    # Never take over a Funnel port that something else already uses.
+    if "$TS" funnel status 2>/dev/null | grep -q ":$FUNNEL_PORT"; then echo "Funnel port $FUNNEL_PORT is in use"; exit 1; fi
+    props=(--setenv=INLOG_FUNNEL=1 "--property=ExecStopPost=$TS funnel --https=$FUNNEL_PORT off")
+else
+    t=$(openssl rand -hex 24)
+    props=()
+fi
+
 systemctl --user stop "usage-inloglink-$p" 2>/dev/null || true
-systemd-run --user --quiet --collect --unit="usage-inloglink-$p" --setenv=INLOG_TOKEN="$t" \
-    --property=RuntimeMaxSec=$((m * 60 + 60)) node "$(dirname "$(readlink -f "$0")")/usage-inloglink.mjs" "$p" "$m"
-host=$(tailscale status --json | python3 -c 'import sys,json; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
+systemd-run --user --quiet --collect --unit="usage-inloglink-$p" --setenv=INLOG_TOKEN="$t" "${props[@]}" \
+    --property=RuntimeMaxSec=$((m * 60 + 60)) node "$HERE/usage-inloglink.mjs" "$p" "$m"
+host=$("${TS:-tailscale}" status --json | python3 -c 'import sys,json; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
 for _ in 1 2 3 4 5 6 7 8 9 10; do
     journalctl --user -u "usage-inloglink-$p" -n 3 --no-pager -o cat | grep -q "actief op" && break
     systemctl --user is-active --quiet "usage-inloglink-$p" || break
     sleep 1
 done
 systemctl --user is-active --quiet "usage-inloglink-$p" || { journalctl --user -u "usage-inloglink-$p" -n 5 --no-pager -o cat; exit 1; }
-echo "http://$host:${POORT[$p]}/$t"
+
+if [ "$funnel" = 1 ]; then
+    if ! "$TS" funnel --bg --https=$FUNNEL_PORT "http://127.0.0.1:$web" >/dev/null 2>&1; then
+        systemctl --user stop "usage-inloglink-$p" 2>/dev/null || true     # also runs the Funnel-off step
+        echo "Funnel could not be switched on (is Funnel allowed for this node?)"; exit 1
+    fi
+    echo "https://$host:$FUNNEL_PORT/$t"
+else
+    echo "http://$host:$web/$t"
+fi

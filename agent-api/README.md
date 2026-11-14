@@ -62,7 +62,15 @@ Lukt het herstel niet, dan komt er een Telegram-bericht via het profiel `github-
 
 ## Inloglink vanuit het dashboard
 
-Een tegel van een uitgelogd account heeft een knop "Log in". Die zet een versleuteld verzoek in `meta.loginRequests`; `usage-api` heeft daarvoor één stream op `meta` (push, geen timer), start `usage-inloglink <profiel>` en zet de link versleuteld in `meta.loginLinks`. De link werkt alleen in het tailnet en 30 minuten. Welk profiel bij welke meet-Chrome hoort, staat in `inlog_profielen` van `config.json`. Handmatig: `usage-inloglink <rob|raimond|kevin|kevin-lxdg> [minuten]`.
+Een tegel van een uitgelogd account heeft een knop "Log in". Die zet een versleuteld verzoek in `meta.loginRequests`; `usage-api` heeft daarvoor één stream op `meta` (push, geen timer), start `usage-inloglink <profiel>` en zet de link versleuteld in `meta.loginLinks`. De link werkt alleen in het tailnet en 30 minuten. Welk profiel bij welke meet-Chrome hoort, staat in de profielenlijst (hieronder). Handmatig: `usage-inloglink <naam> [minuten] [--tailnet]`.
+
+## Profielenlijst en nieuwe meet-gebruiker
+
+`~/.config/usage-api/profielen.json` (niet in git; `profielen.example.json` is het begin) is de enige lijst: `naam`, `pid` (wordt na de start ingevuld), `diensten`, `start` (`unit` = systemd `chrome-usage@<naam>`, `script` = `usage-chrome-script.py <naam>`), `debugpoort`, `webpoort` en `extern`. Inloglink, herstel, autoupdate, Kevin-script en de Chrome-unit lezen die; `node profielen.mjs names|get|set|sync-env`.
+
+**Toevoegen:** knop "Add measuring profile" in het dashboard, of `usage-gebruiker-toevoegen <naam> [--extern] [--min N]` (uitvoer: laatste regel is de link). Het maakt de poorten, start de Chrome (altijd met `--password-store=basic`), zet de koppeling en het pid via DevTools en geeft een inloglink. Standaard is dat een tailnet-link. Maximaal 8 profielen.
+
+**Publieke link (Funnel), alleen als je het bewust aanzet:** een profiel met `extern: true` (niet de standaard; `--extern` bij het toevoegen, of `node profielen.mjs set <naam> extern true|false`) krijgt een https-link via `tailscale funnel` op poort 8443: token van 64 hex, hooguit 60 minuten, daarna gaat Funnel uit (ook na een crash en bij elke start van de agents-pc). Tijdens de link staat er een inlogscherm van die Chrome op internet; wie de link heeft, kan het gebruiken. Eisen: Funnel moet voor deze node aan staan in het tailnet, en poort 8443 moet vrij zijn. Nieuwe gebruikers, Rob, Raimond en Kevin staan op `extern: false`.
 
 ## Installeren en testen
 

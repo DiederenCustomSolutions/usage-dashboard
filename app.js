@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.34.0";
+const APP_VERSION = "0.35.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -280,6 +280,9 @@ let state = {
     // Login links (v0.34.0): meta.loginRequests / meta.loginLinks, keyed by profile id.
     loginRequests: {},
     loginLinks: {},
+    // Add measuring profile (v0.35.0): meta.addRequests / meta.addResults, keyed by request id.
+    addRequests: {},
+    addResults: {},
     // Currently selected profile tab (null = all profiles)
     selectedProfileId: null,
     // GEDEELDE dashboard-configuratie (gesynct via de cloud-bin, niet per apparaat):
@@ -1919,6 +1922,7 @@ function updateUI() {
     applyBlockVisibility();
     renderVisibleBlockToggles();
     renderMultiProfileCards();
+    renderAddMeasuring();
 }
 
 // 1. Calculate and Render Limits Helper
@@ -4119,6 +4123,8 @@ function cs2ReadState(config) {
                 clients: meta.clients || {},   // kijk-apparaten (telefoon/browser) + hun versie
                 loginRequests: meta.loginRequests || {},
                 loginLinks: meta.loginLinks || {},
+                addRequests: meta.addRequests || {},
+                addResults: meta.addResults || {},
                 _schema: CS2_SCHEMA
             };
         }
@@ -5013,6 +5019,96 @@ document.addEventListener("click", (e) => {
     }
 });
 
+/* ======================================================================
+   ADD MEASURING PROFILE (v0.35.0)
+   Knop in de profielenzijbalk: naam invullen, de agents-pc maakt een eigen meet-Chrome en geeft
+   een inloglink terug. Zelfde route als de Log in-knop: versleuteld verzoek in
+   meta.addRequests[id] = { name, at }, antwoord in meta.addResults[id] (usage-api luistert op
+   zijn ene stream; geen timer). De link is een tailnet-link; alleen een profiel dat Rob bewust op
+   extern zet, krijgt een tijdelijke publieke link (Tailscale Funnel).
+   ====================================================================== */
+const ADD_NAME_RE = /^[a-z][a-z0-9-]{1,23}$/;
+const ADD_ERROR_SHOW_MS = 10 * 60000;
+let addMeasuringSig = null;
+
+// Pure: wat het paneel toont. Testbaar zonder DOM.
+function addMeasuringState(now, requests, results) {
+    const open = Object.values(requests || {}).some(r => r && now - r.at < LOGIN_REQUEST_MAX_MS);
+    if (open) return { kind: "pending" };
+    const res = Object.values(results || {}).filter(Boolean).sort((a, b) => b.at - a.at)[0];
+    if (res && res.url && res.until > now) return { kind: "ready", url: res.url, name: res.name, pub: !!res.public };
+    if (res && res.error && now - res.at < ADD_ERROR_SHOW_MS) return { kind: "failed", error: res.error };
+    return { kind: "idle" };
+}
+
+function addMeasuringHTML(st) {
+    if (st.kind === "pending") return `<span class="add-measuring-note"><i class="fa-solid fa-spinner fa-spin"></i> Adding… up to a minute</span>`;
+    if (st.kind === "ready") return `<span class="add-measuring-note">${escapeHtmlSafe(st.name)}${st.pub ? " · public link" : ""}</span>`
+        + `<button type="button" class="login-btn" data-add-act="open"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open login</button>`
+        + `<button type="button" class="login-btn" data-add-act="copy" title="Copy link"><i class="fa-regular fa-copy"></i></button>`
+        + `<button type="button" class="login-btn" data-add-act="another" title="Add another">+</button>`;
+    const err = st.kind === "failed" ? `<span class="add-measuring-note add-measuring-error">${escapeHtmlSafe(st.error)}</span>` : "";
+    return `<input type="text" id="add-measuring-name" class="add-measuring-input" placeholder="name, e.g. anna" maxlength="24" autocomplete="off" autocapitalize="none" spellcheck="false">`
+        + `<button type="button" class="login-btn" data-add-act="submit">Add</button>${err}`;
+}
+
+function renderAddMeasuring() {
+    const btn = document.getElementById("btn-open-add-measuring"), panel = document.getElementById("add-measuring-panel");
+    if (!btn || !panel) return;
+    const cfg = isSyncClient();
+    btn.style.display = cfg && cs2IsFirebase(cfg) ? "" : "none";
+    const st = addMeasuringState(Date.now(), state.addRequests, state.addResults);
+    const sig = st.kind + "|" + (st.url || "") + "|" + (st.error || "");
+    if (sig === addMeasuringSig) return;                // keeps what is being typed
+    addMeasuringSig = sig;
+    panel.innerHTML = addMeasuringHTML(st);
+    if (st.kind !== "idle") panel.style.display = "flex";
+}
+
+function requestAddMeasuring(raw) {
+    const cfg = isSyncClient();
+    if (!cfg || !cs2IsFirebase(cfg)) return;
+    const name = String(raw || "").trim().toLowerCase().replace(/\s+/g, "-");
+    if (!ADD_NAME_RE.test(name)) {
+        showToast(`<i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-red);"></i> Name: 2–24 letters, digits or -, starting with a letter.`);
+        return;
+    }
+    const at = Date.now(), id = "add-" + at.toString(36) + Math.random().toString(36).slice(2, 6);
+    state.addRequests = { ...state.addRequests, [id]: { name, at } };
+    updateUI();
+    cs2UpdateEnc(cfg, "meta", (m) => {
+        m.schema = CS2_SCHEMA;
+        m.addRequests = { ...(m.addRequests || {}), [id]: { name, at } };
+        return m;
+    }).catch(() => {
+        delete state.addRequests[id];
+        updateUI();
+        showToast(`<i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-red);"></i> Request failed.`);
+    });
+}
+
+document.addEventListener("click", (e) => {
+    const open = e.target.closest && e.target.closest("#btn-open-add-measuring");
+    if (open) {
+        const panel = document.getElementById("add-measuring-panel");
+        panel.style.display = panel.style.display === "none" ? "flex" : "none";
+        const input = document.getElementById("add-measuring-name");
+        if (input && panel.style.display !== "none") input.focus();
+        return;
+    }
+    const btn = e.target.closest && e.target.closest("[data-add-act]");
+    if (!btn) return;
+    const act = btn.getAttribute("data-add-act");
+    const st = addMeasuringState(Date.now(), state.addRequests, state.addResults);
+    if (act === "submit") requestAddMeasuring((document.getElementById("add-measuring-name") || {}).value);
+    else if (act === "another") { state.addResults = {}; addMeasuringSig = null; renderAddMeasuring(); }
+    else if (st.kind === "ready" && act === "open") window.open(st.url, "_blank", "noopener");
+    else if (st.kind === "ready" && act === "copy") navigator.clipboard.writeText(st.url).then(() => showToast(`<i class="fa-solid fa-copy"></i> Login link copied.`)).catch(() => {});
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target && e.target.id === "add-measuring-name") requestAddMeasuring(e.target.value);
+});
+
 // Eenvoudige HTML-escape voor labels/resetteksten.
 function escapeHtmlSafe(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -5669,6 +5765,8 @@ function processNormalizedCloudDoc(doc, syncClient, isManual) {
         migrateLocalConfigOnce();
         state.loginRequests = doc.loginRequests || {};
         state.loginLinks    = doc.loginLinks || {};
+        state.addRequests   = doc.addRequests || {};
+        state.addResults    = doc.addResults || {};
         if (doc.profiles && Object.keys(doc.profiles).length > 0) {
             state.cloudProfiles = mergeNewerProfiles(state.cloudProfiles, doc.profiles);
             state.syncStatus    = aggregateProfileSyncStatus(state.cloudProfiles);

@@ -2,22 +2,28 @@
 // Login link for one measuring Chrome on the agents-pc (Rob, 10-11-2026).
 // Shows only a login tab of that Chrome in the browser (screencast over DevTools), mouse and keys go back.
 // Tailnet only (binds to the tailscale0 address), secret token in the URL, stops by itself.
-// Start with ~/bin/usage-inloglink <profiel>; never logs what is typed.
+// With INLOG_FUNNEL=1 (only for a profile with extern: true, see usage-inloglink) it binds to
+// 127.0.0.1 instead and Tailscale Funnel carries it to the internet for the length of the link.
+// Start with ~/bin/usage-inloglink <profiel>; never logs what is typed or the token.
+// Ports and start site come from the profile list (profielen.mjs), not from this file.
 import http from "node:http";
 import crypto from "node:crypto";
 import os from "node:os";
+import { loadProfielen, byName, startSite } from "./profielen.mjs";
 
-const PROFIELEN = { rob: [9231, 8791], raimond: [9232, 8792], kevin: [9233, 8793], "kevin-lxdg": [9234, 8794] };
 const SITES = { claude: "https://claude.ai/login", chatgpt: "https://chatgpt.com/auth/login" };
 const profiel = process.argv[2];
 const minuten = Number(process.argv[3] || 30);
 const token = process.env.INLOG_TOKEN;
-if (!PROFIELEN[profiel] || !token || token.length < 32) {
-    console.error("Gebruik: INLOG_TOKEN=<geheim> usage-inloglink.mjs rob|raimond|kevin|kevin-lxdg [minuten]");
+const funnel = process.env.INLOG_FUNNEL === "1";
+const prof = byName(loadProfielen(), profiel || "");
+if (!prof || !token || token.length < 32 || !(minuten > 0)) {
+    console.error("Usage: INLOG_TOKEN=<secret> usage-inloglink.mjs <profile> [minutes]");
     process.exit(2);
 }
-const [cdpPort, webPort] = PROFIELEN[profiel];
-const tsIp = (os.networkInterfaces().tailscale0 || []).find(a => a.family === "IPv4")?.address;
+if (funnel && !prof.extern) { console.error("this profile is not marked extern: no public link"); process.exit(2); }
+const cdpPort = prof.debugpoort, webPort = prof.webpoort;
+const tsIp = funnel ? "127.0.0.1" : (os.networkInterfaces().tailscale0 || []).find(a => a.family === "IPv4")?.address;
 if (!tsIp) { console.error("geen tailscale0-adres"); process.exit(1); }
 const W = 1200, H = 850;
 
@@ -103,22 +109,22 @@ async function invoer(i) {
 }
 
 // --- web ---
-const PAGINA = `<!doctype html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Inloggen ${profiel}</title><style>
+const PAGINA = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Log in ${profiel}</title><style>
 body{margin:0;font:14px system-ui,sans-serif;background:#1d1d1f;color:#eee}
 header{display:flex;gap:8px;align-items:center;padding:8px 12px;flex-wrap:wrap}
 button{font:inherit;padding:6px 12px;border-radius:6px;border:1px solid #555;background:#333;color:#eee;cursor:pointer}
 #klaar{margin-left:auto;background:#2d6a3e}
 #scherm{display:block;width:100%;max-width:${W}px;margin:0 auto;outline:none;cursor:default;touch-action:none}
 #tijd{opacity:.7}</style></head><body>
-<header><b>Meet-Chrome ${profiel}</b><button data-site="claude">Claude</button><button data-site="chatgpt">ChatGPT</button>
-<span id="tijd"></span><button id="klaar">Klaar</button></header>
+<header><b>${profiel}</b><button data-site="claude">Claude</button><button data-site="chatgpt">ChatGPT</button>
+<span id="tijd"></span><button id="klaar">Done</button></header>
 <img id="scherm" tabindex="0" alt="">
 <script>
 const basis=location.pathname.replace(/\\/$/,"");const img=document.getElementById("scherm");
 const post=o=>fetch(basis+"/input",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(o)});
 new EventSource(basis+"/frames").onmessage=e=>{const f=JSON.parse(e.data);img.src="data:image/jpeg;base64,"+f.img};
-const eind=Date.now()+${minuten}*60000;setInterval(()=>{const m=Math.max(0,Math.ceil((eind-Date.now())/60000));document.getElementById("tijd").textContent="nog "+m+" min"},1000);
+const eind=Date.now()+${minuten}*60000;setInterval(()=>{const m=Math.max(0,Math.ceil((eind-Date.now())/60000));document.getElementById("tijd").textContent=m+" min left"},1000);
 const pos=e=>{const r=img.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height}};
 const mod=e=>(e.altKey?1:0)|(e.ctrlKey?2:0)|(e.metaKey?4:0)|(e.shiftKey?8:0);
 let neer=false,laatst=0;
@@ -131,7 +137,7 @@ img.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase(
 img.addEventListener("paste",e=>{post({t:"text",text:e.clipboardData.getData("text")});e.preventDefault()});
 document.addEventListener("paste",e=>{if(document.activeElement!==img){post({t:"text",text:e.clipboardData.getData("text")})}});
 document.querySelectorAll("[data-site]").forEach(b=>b.onclick=()=>{post({t:"go",site:b.dataset.site});img.focus()});
-document.getElementById("klaar").onclick=()=>{post({t:"stop"});document.body.innerHTML="<p style=padding:16px>Gestopt.</p>"};
+document.getElementById("klaar").onclick=()=>{post({t:"stop"});document.body.innerHTML="<p style=padding:16px>Stopped.</p>"};
 img.focus();
 </script></body></html>`;
 
@@ -173,7 +179,7 @@ process.on("SIGINT", () => stop("SIGINT"));
 setTimeout(() => stop(`${minuten} minuten voorbij`), minuten * 60000);
 
 await send("Target.setDiscoverTargets", { discover: true });
-const { targetId } = await send("Target.createTarget", { url: SITES[profiel.startsWith("kevin") ? "chatgpt" : "claude"] });
+const { targetId } = await send("Target.createTarget", { url: SITES[startSite(prof)] });
 eigen.add(targetId);
 await toon(targetId);
-server.listen(webPort, tsIp, () => console.log(`inloglink ${profiel} actief op ${tsIp}:${webPort}, ${minuten} min`));
+server.listen(webPort, tsIp, () => console.log(`inloglink ${profiel} actief op ${tsIp}:${webPort}, ${minuten} min${funnel ? ", funnel" : ""}`));

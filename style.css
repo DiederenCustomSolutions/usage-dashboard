@@ -2933,6 +2933,16 @@ body.auth-view .app-container {
 .login-btn:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
 .login-btn:disabled { opacity: 0.6; cursor: default; }
 
+/* ===== Add measuring profile (v0.35.0): paneeltje onder de knop in de profielenzijbalk ===== */
+.add-measuring-panel { align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 2px 8px; }
+.add-measuring-panel .login-btn { margin-left: 0; }
+.add-measuring-input {
+    flex: 1; min-width: 0; padding: 4px 9px; border-radius: 6px; font-size: 0.78rem; color: var(--text-main);
+    background: rgba(0,0,0,0.3); border: 1px solid var(--border-hover);
+}
+.add-measuring-note { font-size: 0.72rem; color: var(--text-muted); }
+.add-measuring-error { color: var(--accent-red); flex-basis: 100%; }
+
 /* ===== ChatGPT-resets (v0.28.0): knop naast "Last seen" + uitklaplijst ===== */
 .mp-card .card-stats { position: relative; }
 .reset-credits-btn {

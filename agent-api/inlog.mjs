@@ -2,30 +2,49 @@
 // meta.loginRequests[<pid>] = { at }; this service sees it through ONE open stream on meta
 // (push, no timer, no polling), starts usage-inloglink for that profile's measuring Chrome
 // and writes meta.loginLinks[<pid>] = { url, at, until } back. All encrypted with the pairing
-// key like the rest of meta. The link only works inside the tailnet. Never logs the link.
+// key like the rest of meta. A tailnet link only works inside the tailnet; a profile marked extern
+// gets a public Funnel link (https, see usage-inloglink). Never logs the link.
+// v0.35.0: also meta.addRequests[<id>] = { name, at } ("Add measuring profile"): runs
+// usage-gebruiker-toevoegen and answers in meta.addResults[<id>]. Names and pids come from
+// profielen.json (profielen.mjs), not from config.
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { decrypt, encrypt } from "./server.mjs";
+import { loadProfielen, byPid, setField, defaultFile, NAAM_RE } from "./profielen.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const LINK_RE = /^http:\/\/[A-Za-z0-9.-]+:\d+\/[0-9a-f]{32,}$/;
+export const LINK_RE = /^https?:\/\/[A-Za-z0-9.-]+(:\d+)?\/[0-9a-f]{32,}$/;
 
-// Runs `usage-inloglink <name> <min>`; the link is its last output line.
-export function runInlogLink(name, minutes, { command = path.join(HERE, "usage-inloglink"), exec = execFile } = {}) {
+// Runs a command whose last output line is a login link. Rejects with the exit code, never with output.
+export function runForLink(command, args, { exec = execFile, timeout = 30000 } = {}) {
     return new Promise((resolve, reject) => {
-        exec(command, [name, String(minutes)], { timeout: 30000 }, (err, stdout) => {
+        exec(command, args, { timeout }, (err, stdout) => {
             const url = String(stdout || "").trim().split("\n").pop();
-            if (err || !LINK_RE.test(url)) return reject(new Error("inloglink failed"));
+            if (err || !LINK_RE.test(url)) return reject(Object.assign(new Error("command failed"), { code: err && typeof err.code === "number" ? err.code : 1 }));
             resolve(url);
         });
     });
 }
+// `usage-inloglink <name> <min>`
+export const runInlogLink = (name, minutes, { command = path.join(HERE, "usage-inloglink"), ...o } = {}) => runForLink(command, [name, String(minutes)], o);
+// `usage-gebruiker-toevoegen <name> --min <min>`: starts a Chrome, so it may take a while.
+export const runAddUser = (name, minutes, { command = path.join(HERE, "usage-gebruiker-toevoegen"), ...o } = {}) =>
+    runForLink(command, [name, "--min", String(minutes)], { timeout: 150000, ...o });
 
-export function createLoginService(config, secrets, { fetchImpl = fetch, run = runInlogLink, clock = () => Date.now() } = {}) {
+// Profiles whose pid is not known yet (just added): ask their Chrome now, on demand.
+export async function resolvePids(file = defaultFile()) {
+    const { readProfileId } = await import("./ext-cdp.mjs");
+    for (const p of loadProfielen(file).profielen.filter(p => !p.pid)) {
+        const pid = await readProfileId(p.debugpoort).catch(() => null);
+        if (pid) setField(file, p.naam, "pid", pid);
+    }
+}
+
+export function createLoginService(config, secrets, { fetchImpl = fetch, run = runInlogLink, runAdd = runAddUser, clock = () => Date.now(),
+    profielen = () => loadProfielen(), resolve = () => resolvePids() } = {}) {
     const db = secrets.dbUrl.replace(/\/$/, "");
     const metaUrl = `${db}/profiles/${secrets.binId}/meta.json`;
-    const names = config.inlog_profielen || {};
     const minutes = config.inlog_min ?? 30;
     const maxAgeMs = (config.inlog_verzoek_max_min ?? 5) * 60000;
     let busy = false, again = false;
@@ -64,7 +83,9 @@ export function createLoginService(config, secrets, { fetchImpl = fetch, run = r
 
     async function handle(pid, req) {
         const now = clock();
-        const name = names[pid];
+        let p = byPid(profielen(), pid);
+        if (!p) { await Promise.resolve(resolve()).catch(() => {}); p = byPid(profielen(), pid); }
+        const name = p && p.naam;
         let link;
         if (!name) link = { error: "no measuring Chrome for this profile", at: now };
         else {
@@ -77,6 +98,25 @@ export function createLoginService(config, secrets, { fetchImpl = fetch, run = r
         });
     }
 
+    const ADD_ERRORS = { 2: "invalid name", 3: "name already exists" };
+    async function handleAdd(id, req) {
+        const now = clock();
+        let result;
+        if (typeof req.name !== "string" || !NAAM_RE.test(req.name)) result = { error: "invalid name", at: now };
+        else {
+            try {
+                const url = await runAdd(req.name, minutes);
+                const pub = url.startsWith("https:");
+                result = { name: req.name, url, at: now, until: now + (pub ? Math.min(minutes, 60) : minutes) * 60000, public: pub };
+            } catch (e) { result = { name: req.name, error: ADD_ERRORS[e && e.code] || "could not add the profile", at: now }; }
+        }
+        await update(m => {
+            if (m.addRequests && m.addRequests[id] && m.addRequests[id].at === req.at) delete m.addRequests[id];
+            const keep = Object.entries(m.addResults || {}).filter(([, r]) => r && now - r.at < 86400000);
+            m.addResults = { ...Object.fromEntries(keep), [id]: result };
+        });
+    }
+
     // One pass over meta: handles every open request. Safe to call on every stream event.
     async function check() {
         if (busy) { again = true; return; }
@@ -85,14 +125,15 @@ export function createLoginService(config, secrets, { fetchImpl = fetch, run = r
             do {
                 again = false;
                 const cur = await readMeta().catch(() => null);
-                const reqs = Object.entries((cur && cur.meta.loginRequests) || {});
-                for (const [pid, req] of reqs) {
-                    if (!req || typeof req.at !== "number") continue;
-                    if (clock() - req.at > maxAgeMs) {      // stale (e.g. from before a restart): drop it
-                        await update(m => { if (m.loginRequests) delete m.loginRequests[pid]; }).catch(() => {});
-                        continue;
+                for (const [field, work] of [["loginRequests", handle], ["addRequests", handleAdd]]) {
+                    for (const [key, req] of Object.entries((cur && cur.meta[field]) || {})) {
+                        if (!req || typeof req.at !== "number") continue;
+                        if (clock() - req.at > maxAgeMs) {      // stale (e.g. from before a restart): drop it
+                            await update(m => { if (m[field]) delete m[field][key]; }).catch(() => {});
+                            continue;
+                        }
+                        await work(key, req).catch(() => {});
                     }
-                    await handle(pid, req).catch(() => {});
                 }
             } while (again);
         } finally { busy = false; }
