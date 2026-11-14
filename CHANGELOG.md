@@ -15,11 +15,11 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 - **A logged-out account gets a "Log in" button.** The tile of an account that says "check if logged in" asks the agents-pc for a login link to that measuring Chrome. The tile then shows "Open login" and a copy button; the link works only on devices in the tailnet and for 30 minutes. `usage-api` listens on one stream on the shared `meta` node (push, no timer) and starts `usage-inloglink`, which is now in `agent-api/`. Rerun `agent-api/install.sh` on the agents-pc.
 
-## [Unreleased]
+## [0.36.0] — 2026-11-14
 
-- Centrale tabellen voor berichten, Codex en klusstanden, `POST /v1/inname` met pc-tokens en een dagelijkse SQLite-back-up; leesendpoints `/v1/verbruik`, `/v1/klussen`, `/v1/backup` en `/v1/verloop` met bronfilter.
-
-- **Usage-api bewaart nieuwe metingen in SQLite-historie**, inclusief resets en ChatGPT-reset-tegoeden. `GET /v1/verloop` leest het verloop per account; geen extra Firebase-lezingen of timers en historieproblemen houden usage-antwoorden niet op.
+- **One central usage database on the agents-pc.** `historie.sqlite` of `usage-api` now also keeps Claude messages, Codex usage and job states next to the limit history (append-only, unique keys, never overwritten). Robs pc sends new rows to `POST /v1/inname` (token per pc, `node agent-api/inname-token.mjs <pc>`) on existing triggers only. New reads: `GET /v1/verbruik` (per day, account, model, job), `GET /v1/klussen`, `GET /v1/backup`; `GET /v1/verloop` also shows the Codex measurements (`bron=codex`). Daily SQLite backup on the first write of a day, kept 14 days. Design: `ONTWERP-usage-database.md`.
+- **Usage-api keeps every new measurement in SQLite history**, including resets and ChatGPT reset credits (`GET /v1/verloop`); no extra Firebase reads or timers.
+- Rerun `agent-api/install.sh` on the agents-pc, or see the release notes for the usage-api-only rollout.
 
 ## [0.33.2] — 2026-11-12
 
