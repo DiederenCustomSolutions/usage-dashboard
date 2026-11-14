@@ -7,7 +7,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { encrypt, decrypt, buildUsage, createStore, createServer, clientAllowed } from "../server.mjs";
+import { encrypt, decrypt, buildUsage, createStore, createServer, clientAllowed, loadAll } from "../server.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const config = JSON.parse(fs.readFileSync(path.join(here, "..", "config.example.json"), "utf8"));
@@ -121,6 +121,35 @@ test("HTTP: token, JSON, refresh trigger, outage fallback", async () => {
     }
 });
 
+test("HTTP: ?ververs=1 asks right away and waits for the new measurement", async () => {
+    const fb = { profiles: profiles({ seen: NOW - 60000 }), meta: { schema: 2 }, puts: 0, down: false };
+    const fbServer = await fakeFirebase(fb);
+    const cfg = { ...config, cache_s: 0, leestijd_ms: 500, ververs_lees_ms: 50, ververs_wacht_s: 2 };
+    const store = createStore(cfg, { dbUrl: `http://127.0.0.1:${fbServer.address().port}`, binId: "bin", pairingKey: KEY });
+    const server = createServer({ config: cfg, token: TOKEN, store, clock: () => NOW });
+    const port = await listen(server);
+    const get = p => fetch(`http://127.0.0.1:${port}${p}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    try {
+        // Fresh data (1 min): a plain read asks nothing.
+        await (await get("/v1/usage")).json();
+        await new Promise(res => setTimeout(res, 100));
+        assert.equal(fb.puts, 0);
+        // The button: asks at once, and answers with the measurement that arrives meanwhile.
+        setTimeout(() => { fb.profiles = profiles({ seen: NOW + 5000, kb: 55 }); }, 200);
+        const u = await (await get("/v1/usage?ververs=1")).json();
+        assert.equal(fb.puts, 1);
+        assert.equal(fb.meta.refreshRequested, true);
+        assert.equal(u.ververst, true);
+        // No new measurement within the wait: answers anyway, ververst false.
+        const t0 = Date.now();
+        const v = await (await get("/v1/usage?ververs=1")).json();
+        assert.equal(v.ververst, false);
+        assert.ok(Date.now() - t0 < 3000);
+    } finally {
+        server.close(); fbServer.close();
+    }
+});
+
 test("repair check: every account must be measured after the moment asked for", async () => {
     const { allMeasuredSince } = await import("../herstel-check.mjs");
     const seen = iso => ({ laatst_gezien: iso });
@@ -212,4 +241,214 @@ test("login link: the stream triggers the work (push); no request, no run", asyn
         await new Promise(r => setTimeout(r, 150));
         assert.equal(calls.length, 1);                      // its own write on the stream does not run it again
     } finally { stream.close(); for (const c of sse) c.end(); server.close(); }
+});
+
+// Keep even temporary SQLite files inside the authorized workspace.
+function historyFixture(t, overrides = {}) {
+    const dir = fs.mkdtempSync(path.join(here, "historie-test-"));
+    const state = { profiles: profiles(), reads: 0, metaReads: 0 };
+    const cfg = { ...config, cache_s: 0, ...overrides };
+    const secrets = { dbUrl: "https://fake.invalid", binId: "bin", pairingKey: KEY };
+    const fetchImpl = async (url, options) => {
+        if (url.endsWith("/status.json")) {
+            state.reads++;
+            state.onRead?.();
+            const body = Object.fromEntries(Object.entries(state.profiles).map(([id, profile]) => [id, { data: encrypt(JSON.stringify(profile), KEY) }]));
+            return new Response(JSON.stringify(body));
+        }
+        assert.ok(url.endsWith("/meta.json"));
+        if (options.method !== "PUT") state.metaReads++;
+        return new Response(JSON.stringify({ data: encrypt(JSON.stringify({ schema: 2 }), KEY) }));
+    };
+    const historyFile = path.join(dir, "historie.sqlite");
+    const makeStore = (file = historyFile) => {
+        const store = createStore(cfg, secrets, { fetchImpl, historyFile: file });
+        t.after(() => store.close());
+        return store;
+    };
+    // Hooks run in registration order: register cleanup after store/server hooks.
+    return { dir, state, cfg, historyFile, makeStore,
+        cleanup: () => t.after(() => fs.rmSync(dir, { recursive: true, force: true })) };
+}
+
+test("history: one row per new account measurement, persistent and append-only", async t => {
+    const f = historyFixture(t);
+    const store = f.makeStore();
+    await store.usage(NOW);
+    const first = (await store.verloop({ account: "account1" })).metingen;
+    assert.equal(first.length, 1);
+    assert.deepEqual(first[0], {
+        id: first[0].id, gelezen_op: new Date(NOW).toISOString(), account: "account1", dienst: "chatgpt",
+        laatst_gezien: new Date(NOW - 60000).toISOString(), vijf_uur_pct: 20,
+        vijf_uur_reset: new Date(NOW + 3600e3).toISOString(), week_pct: 30,
+        week_reset: new Date(NOW + 86400e3).toISOString(), bron: "api",
+        reset_tegoeden: null, reset_tegoeden_json: null
+    });
+    await store.usage(NOW + 1);
+    assert.deepEqual((await store.verloop({ account: "account1" })).metingen, first);
+    // Different values with an older timestamp must not grow or rewrite history.
+    f.state.profiles = profiles({ seen: NOW - 120000, rob5h: 99 });
+    await store.usage(NOW + 2);
+    assert.deepEqual((await store.verloop({ account: "account1" })).metingen, first);
+    const reads = f.state.reads;
+    assert.equal((await store.verloop()).metingen.length, config.accounts.length);
+    assert.equal(f.state.reads, reads, "history queries do not read Firebase");
+    assert.equal(reads, 3);
+    const rows = (await store.verloop()).metingen;
+    assert.equal(rows.find(r => r.account === "account2").vijf_uur_pct, null);
+    assert.equal(rows.find(r => r.account === "claude").vijf_uur_pct, 30);
+
+    await store.close();
+    const reopened = f.makeStore();
+    f.cleanup();
+    await reopened.usage(NOW + 3);
+    assert.deepEqual((await reopened.verloop({ account: "account1" })).metingen, first);
+    f.state.profiles = profiles({ seen: NOW, rob5h: 25 });
+    await reopened.usage(NOW + 4);
+    const newer = (await reopened.verloop({ account: "account1" })).metingen;
+    assert.equal(newer.length, 2);
+    assert.equal(newer[0].vijf_uur_pct, 25);
+    assert.deepEqual(newer[1], first[0]);
+});
+
+test("history: fresh stores its initial read and every existing refresh read", async t => {
+    const f = historyFixture(t, { ververs_lees_ms: 1, ververs_wacht_s: 1 });
+    const store = f.makeStore(); f.cleanup();
+    const now = Date.now();
+    f.state.profiles = profiles({ seen: now - 1000 });
+    f.state.onRead = () => {
+        if (f.state.reads === 3) f.state.profiles = profiles({ seen: now, robWeek: 35 });
+    };
+    const usage = await store.usage(now, { ververs: true });
+    assert.equal(usage.ververst, true);
+    const rows = (await store.verloop({ account: "account1" })).metingen;
+    assert.equal(rows.length, 2, "the unchanged intermediate refresh read is deduplicated");
+    assert.equal(rows[0].week_pct, 35);
+    assert.equal(rows[1].week_pct, 30);
+    assert.equal(f.state.reads, 3);
+    assert.equal(f.state.metaReads, 1);
+});
+
+test("history: reset credits preserve count, zero, unknown items and expiry dates", async t => {
+    const f = historyFixture(t);
+    const store = f.makeStore(); f.cleanup();
+    const items = [{ title: "Reset", expiresAt: NOW + 86400e3 }];
+    f.state.profiles[config.accounts[0].profiel].syncStatus.chatgpt.resetCredits = { count: 2, items };
+    f.state.profiles[config.accounts[1].profiel].syncStatus.chatgpt.resetCredits = { count: 0, items: [] };
+    f.state.profiles[config.accounts[2].profiel].syncStatus.chatgpt.resetCredits = { count: 3, items: null };
+    await store.usage(NOW);
+    const { metingen } = await store.verloop();
+    assert.equal(metingen.find(r => r.account === "account1").reset_tegoeden, 2);
+    assert.deepEqual(JSON.parse(metingen.find(r => r.account === "account1").reset_tegoeden_json), items);
+    assert.equal(metingen.find(r => r.account === "account2").reset_tegoeden, 0);
+    assert.equal(metingen.find(r => r.account === "account2").reset_tegoeden_json, "[]");
+    assert.equal(metingen.find(r => r.account === "account3").reset_tegoeden, 3);
+    assert.equal(metingen.find(r => r.account === "account3").reset_tegoeden_json, null);
+    assert.equal(metingen.find(r => r.account === "claude").reset_tegoeden, null);
+});
+
+test("HTTP history: filters, newest first, default limit, auth and no extra reads", async t => {
+    const f = historyFixture(t);
+    const store = f.makeStore();
+    const server = createServer({ config: f.cfg, token: TOKEN, store, clock: () => NOW });
+    const port = await listen(server);
+    t.after(() => new Promise(resolve => server.close(resolve))); f.cleanup();
+    const get = (p, token = TOKEN, method = "GET") => fetch(`http://127.0.0.1:${port}${p}`, {
+        method, headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    assert.equal((await get("/v1/verloop", null)).status, 401);
+    assert.equal((await get("/v1/verloop", "wrong")).status, 401);
+    assert.equal((await get("/v1/verloop", TOKEN, "POST")).status, 405);
+    // 126 readings x 4 accounts: verify that the default really stops at 500.
+    for (let i = 0; i < 126; i++) {
+        f.state.profiles = profiles({ seen: NOW + i });
+        await store.usage(NOW + i);
+    }
+    const all = await (await get("/v1/verloop")).json();
+    assert.equal(all.metingen.length, 500);
+    const filtered = await (await get(`/v1/verloop?account=account1&sinds=${new Date(NOW + 124).toISOString()}&max=1`)).json();
+    assert.equal(filtered.metingen.length, 1);
+    assert.equal(filtered.metingen[0].account, "account1");
+    assert.equal(filtered.metingen[0].laatst_gezien, new Date(NOW + 125).toISOString());
+    const inclusive = await (await get(`/v1/verloop?account=account1&sinds=${new Date(NOW + 124).toISOString()}`)).json();
+    assert.equal(inclusive.metingen.length, 2);
+    assert.deepEqual(await (await get("/v1/verloop?account=unknown")).json(), { metingen: [] });
+    for (const p of ["max=0", "max=-1", "max=1.5", "max=abc", "sinds=invalid"]) assert.equal((await get(`/v1/verloop?${p}`)).status, 400);
+    assert.equal(f.state.reads, 126);
+    assert.equal(f.state.metaReads, 0);
+    f.cfg.toegestaan = ["192.0.2.1"];
+    assert.equal((await get("/v1/verloop")).status, 403);
+});
+
+test("history failures: corrupt or inaccessible SQLite never breaks /v1/usage", async t => {
+    for (const kind of ["corrupt", "directory", "missing-parent"]) await t.test(kind, async t => {
+        const errors = [];
+        t.mock.method(console, "error", line => errors.push(line));
+        const f = historyFixture(t);
+        const historyFile = kind === "directory" ? f.dir : kind === "missing-parent" ? path.join(f.dir, "missing", "history.sqlite") : f.historyFile;
+        if (kind === "corrupt") fs.writeFileSync(historyFile, "not a SQLite database");
+        const store = f.makeStore(historyFile);
+        const server = createServer({ config: f.cfg, token: TOKEN, store, clock: () => NOW });
+        const port = await listen(server);
+        t.after(() => new Promise(resolve => server.close(resolve))); f.cleanup();
+        const get = p => fetch(`http://127.0.0.1:${port}${p}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+        const started = Date.now();
+        const response = await get("/v1/usage");
+        assert.equal(response.status, 200);
+        assert.equal(ids(await response.json()), "account1,account2,account3,claude");
+        assert.ok(Date.now() - started < 2000);
+        assert.deepEqual(await (await get("/v1/verloop")).json(), { metingen: [], fout: "geen historie" });
+        // Once disabled, repeated usage and history requests keep working.
+        assert.equal((await get("/v1/usage")).status, 200);
+        assert.deepEqual(await (await get("/v1/verloop")).json(), { metingen: [], fout: "geen historie" });
+        assert.equal(errors.length, 1, "a history failure is only logged once");
+        assert.ok(!/[\r\n]/.test(errors[0]), "the diagnostic stays on one line");
+    });
+});
+
+test("history: unavailable history and disk cache do not fabricate measurements", async t => {
+    const f = historyFixture(t);
+    const cacheFile = path.join(f.dir, "cache.json");
+    fs.writeFileSync(cacheFile, JSON.stringify({ profiles: profiles(), readAt: NOW }));
+    const store = createStore({ ...f.cfg, cache_s: 20 }, { dbUrl: "https://fake.invalid", binId: "bin", pairingKey: KEY }, {
+        cacheFile, historyFile: f.historyFile, fetchImpl: async () => { throw new Error("must not read Firebase"); }
+    });
+    t.after(() => store.close()); f.cleanup();
+    assert.equal(ids(await store.usage(NOW)), "account1,account2,account3,claude");
+    assert.deepEqual(await store.verloop(), { metingen: [] });
+    const without = createStore(f.cfg, { dbUrl: "https://fake.invalid", binId: "bin", pairingKey: KEY });
+    assert.deepEqual(await without.verloop(), { metingen: [], fout: "geen historie" });
+});
+
+test("history: a locked database write cannot break or hold up usage", async t => {
+    const f = historyFixture(t);
+    const store = f.makeStore(); f.cleanup();
+    await store.usage(NOW);
+    assert.equal((await store.verloop()).metingen.length, 4);
+    const { DatabaseSync } = await import("node:sqlite");
+    const lock = new DatabaseSync(f.historyFile);
+    try {
+        lock.exec("BEGIN EXCLUSIVE");
+        f.state.profiles = profiles({ seen: NOW });
+        const started = Date.now();
+        const usage = await store.usage(NOW + 1);
+        assert.equal(ids(usage), "account1,account2,account3,claude");
+        assert.equal(usage.accounts[0].laatst_gezien, new Date(NOW).toISOString());
+        assert.ok(Date.now() - started < 2000);
+        assert.deepEqual(await store.verloop(), { metingen: [], fout: "geen historie" });
+    } finally { lock.exec("ROLLBACK"); lock.close(); }
+    assert.equal(ids(await store.usage(NOW + 2)), "account1,account2,account3,claude");
+});
+
+test("history config paths resolve beside config like cache paths", t => {
+    const f = historyFixture(t); f.cleanup();
+    fs.writeFileSync(path.join(f.dir, "sync.json"), JSON.stringify({ dbUrl: "fake" }));
+    fs.writeFileSync(path.join(f.dir, "token"), TOKEN);
+    const file = path.join(f.dir, "config.json");
+    fs.writeFileSync(file, "{}");
+    assert.equal(loadAll(file).historyFile, path.join(f.dir, "historie.sqlite"));
+    for (const value of [path.join("subdir", "custom.sqlite"), path.join(f.dir, "absolute.sqlite")]) {
+        fs.writeFileSync(file, JSON.stringify({ historie_bestand: value, cache_bestand: value }));
+        assert.equal(loadAll(file).historyFile, loadAll(file).cacheFile);
+    }
 });

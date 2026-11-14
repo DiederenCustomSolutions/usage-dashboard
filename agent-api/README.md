@@ -43,6 +43,14 @@ Elke aanvraag krijgt binnen 2 seconden antwoord uit de cache. De database wordt 
 
 Is de nieuwste meting ouder dan 5 minuten, dan vraagt de service de meet-Chromes om te verversen. Dat is hetzelfde als de verversknop op het dashboard en gebeurt hooguit eens per 2 minuten. De service heeft geen timer: alleen een aanvraag zet iets in gang.
 
+`/v1/usage?ververs=1` is de verversknop (zoals Ververs in de werklijst): de service vraagt meteen een meting (hooguit eens per 10 s) en wacht tot 15 s op de nieuwe meting. Het antwoord heeft dan `ververst: true` of `false` (geen nieuwe meting binnen 15 s; je krijgt de laatste).
+
+## Historie
+
+Elke bestaande Firebase-lezing bewaart de metingen ook in SQLite (`node:sqlite`, zonder extra pakketten), standaard in `historie.sqlite` naast de config. Met `historie_bestand` kies je een ander pad, op dezelfde manier als `cache_bestand`. Het bestand groeit alleen als `laatst_gezien` voor een account nieuwer is dan de laatst opgeslagen meting; bestaande regels worden nooit aangepast of gewist. Ook de resets en ChatGPT-reset-tegoeden met vervaldata blijven bewaard.
+
+`GET /v1/verloop?account=account1&sinds=2026-11-01T00:00:00Z&max=500` geeft `{ metingen: [...] }`, nieuwste `laatst_gezien` eerst. Alle filters zijn optioneel; `sinds` is inclusief en `max` is standaard 500. Het endpoint gebruikt dezelfde token- en adrescontrole als `/v1/usage`. Zonder beschikbare historie is het antwoord `{ metingen: [], fout: "geen historie" }`. SQLite draait in een worker; fouten daarin laten `/v1/usage` gewoon antwoorden. Er komt geen timer, poll of extra Firebase-lezing bij.
+
 ## Herstel van de meet-Chromes
 
 `herstel-meetchromes.sh` start één keer per aanleiding, nooit op een timer:

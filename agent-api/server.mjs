@@ -10,6 +10,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 
 const HOME = os.homedir();
 export const DEFAULT_CONFIG_PATH = process.env.USAGE_API_CONFIG || path.join(HOME, ".config", "usage-api", "config.json");
@@ -60,11 +61,90 @@ export function buildUsage(profiles, config, { now = Date.now(), readOk = true, 
 // ---------------------------------------------------------------------------
 // Data access: one GET of the status collection, short timeout, cached on disk.
 
-export function createStore(config, secrets, { fetchImpl = fetch, cacheFile } = {}) {
+// SQLite is synchronous: keep all disk access off the HTTP thread. Messages are
+// processed in order, so a history query also waits for previously queued writes.
+function createHistory(historyFile, config) {
+    const unavailable = () => ({ metingen: [], fout: "geen historie" });
+    let worker = null, disabled = !historyFile, nextId = 0;
+    let stopping = Promise.resolve();
+    const pending = new Map();
+    function fail(error) {
+        if (disabled) return;
+        disabled = true;
+        console.error(`usage-api: geen historie: ${String(error?.message || error).replace(/[\r\n]+/g, " ")}`);
+        for (const resolve of pending.values()) resolve(unavailable());
+        pending.clear();
+        if (worker) { stopping = worker.terminate().catch(() => {}); worker = null; }
+    }
+    function start() {
+        if (disabled) return false;
+        if (worker) return true;
+        try {
+            worker = new Worker(new URL("./historie-worker.mjs", import.meta.url), { workerData: historyFile, stderr: true });
+            // Failures are reported explicitly; do not forward experimental
+            // SQLite warnings or duplicate worker diagnostics to stderr.
+            worker.stderr.resume();
+            worker.on("message", message => {
+                if (message.fout) return fail(message.fout);
+                pending.get(message.id)?.(message.result);
+                pending.delete(message.id);
+                if (!pending.size) worker?.unref();
+            });
+            worker.on("error", fail);
+            worker.on("exit", () => fail("historieworker gestopt"));
+            worker.unref();
+            return true;
+        } catch (error) { fail(error); return false; }
+    }
+    function request(message) {
+        if (!start()) return Promise.resolve(unavailable());
+        return new Promise(resolve => {
+            const id = ++nextId;
+            pending.set(id, resolve);
+            try { worker.ref(); worker.postMessage({ ...message, id }); }
+            catch (error) { fail(error); }
+        });
+    }
+    return {
+        record({ profiles, readAt }) {
+            if (!start()) return;
+            try {
+                const rows = config.accounts.map(def => {
+                    const account = buildAccount(def, profiles[def.profiel], { now: readAt, readOk: true, staleMin: config.betrouwbaar_max_min ?? 15 });
+                    const credits = def.dienst === "chatgpt" ? profiles[def.profiel]?.syncStatus?.chatgpt?.resetCredits : null;
+                    return {
+                        gelezen_op: iso(readAt), account: def.id, dienst: def.dienst,
+                        laatst_gezien: account.laatst_gezien,
+                        vijf_uur_pct: account.vijf_uur?.gebruikt_pct ?? null,
+                        vijf_uur_reset: account.vijf_uur?.reset ?? null,
+                        week_pct: account.week?.gebruikt_pct ?? null,
+                        week_reset: account.week?.reset ?? null, bron: account.bron,
+                        reset_tegoeden: Number.isInteger(credits?.count) ? credits.count : null,
+                        reset_tegoeden_json: Array.isArray(credits?.items) ? JSON.stringify(credits.items) : null
+                    };
+                }).filter(row => row.laatst_gezien);
+                worker.postMessage({ type: "bewaar", rows });
+            } catch (error) { fail(error); }
+        },
+        verloop: (options = {}) => request({ type: "verloop", ...options }),
+        async close() {
+            if (!worker || disabled) { await stopping; return; }
+            await request({ type: "close" });
+            disabled = true;
+            const closing = worker;
+            worker = null;
+            if (closing) stopping = closing.terminate().catch(() => {});
+            await stopping;
+        }
+    };
+}
+
+export function createStore(config, secrets, { fetchImpl = fetch, cacheFile, historyFile } = {}) {
     const db = secrets.dbUrl.replace(/\/$/, "");
     const url = sub => `${db}/profiles/${secrets.binId}/${sub}.json`;
     let cache = null; // { profiles, readAt }
     let lastRefreshAsk = 0;
+    const history = createHistory(historyFile, config);
     if (cacheFile) { try { cache = JSON.parse(fs.readFileSync(cacheFile, "utf8")); } catch (e) { cache = null; } }
 
     async function getJson(u, timeoutMs, headers = {}) {
@@ -89,8 +169,8 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile } = 
 
     // Same request the dashboard's refresh button makes: meta.refreshRequested(At).
     // Only when meta decrypts to a real object, so a wrong key can never wipe it.
-    async function askRefresh(now) {
-        if (now - lastRefreshAsk < (config.ververs_vraag_min_s ?? 120) * 1000) return;
+    async function askRefresh(now, minS = config.ververs_vraag_min_s ?? 120) {
+        if (now - lastRefreshAsk < minS * 1000) return;
         lastRefreshAsk = now;
         try {
             const { body, etag } = await getJson(url("meta"), 3000, { "X-Firebase-ETag": "true" });
@@ -105,21 +185,50 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile } = 
         } catch (e) { /* the next request asks again */ }
     }
 
-    async function usage(now = Date.now()) {
-        let readOk = true;
-        if (!cache || now - cache.readAt > (config.cache_s ?? 20) * 1000) {
+    const newestOf = profiles => Math.max(0, ...buildUsage(profiles || {}, config, { now: Date.now(), readOk: true, readAt: Date.now() })
+        .accounts.map(a => (a.laatst_gezien ? Date.parse(a.laatst_gezien) : 0)));
+
+    // ?ververs=1 (een knop, zoals Ververs in de werklijst): nu meten en kort wachten op de nieuwe meting.
+    // Alleen op die aanvraag; geen timer. Begrensd: hooguit ververs_wacht_s, lezen elke ververs_lees_ms.
+    async function fresh(now) {
+        let before = 0;
+        try {
+            cache = { profiles: await readProfiles(), readAt: Date.now() };
+            history.record(cache);
+            before = newestOf(cache.profiles);
+        } catch (e) { return false; }
+        await askRefresh(now, config.ververs_knop_min_s ?? 10);
+        const until = Date.now() + (config.ververs_wacht_s ?? 15) * 1000;
+        while (Date.now() < until) {
+            await new Promise(r => setTimeout(r, config.ververs_lees_ms ?? 1500));
+            try {
+                const p = await readProfiles();
+                cache = { profiles: p, readAt: Date.now() };
+                history.record(cache);
+                if (newestOf(p) > before) { if (cacheFile) { try { fs.writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 }); } catch (e) {} } return true; }
+            } catch (e) { /* volgende ronde */ }
+        }
+        return false;
+    }
+
+    async function usage(now = Date.now(), { ververs = false } = {}) {
+        let readOk = true, ververst = null;
+        if (ververs) { ververst = await fresh(now); }
+        else if (!cache || now - cache.readAt > (config.cache_s ?? 20) * 1000) {
             try {
                 cache = { profiles: await readProfiles(), readAt: now };
+                history.record(cache);
                 if (cacheFile) { try { fs.writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 }); } catch (e) {} }
             } catch (e) { readOk = false; }
         }
         const result = buildUsage(cache ? cache.profiles : {}, config, { now, readOk, readAt: cache ? cache.readAt : now });
         if (!readOk) result.fout = cache ? "database niet bereikbaar; laatste bekende waarden" : "database niet bereikbaar; nog geen waarden";
+        if (ververst !== null) result.ververst = ververst;
         const newest = Math.max(0, ...result.accounts.map(a => (a.laatst_gezien ? Date.parse(a.laatst_gezien) : 0)));
         if (readOk && now - newest > (config.ververs_na_min ?? 5) * 60000) askRefresh(now); // not awaited
         return result;
     }
-    return { usage };
+    return { usage, verloop: history.verloop, close: history.close };
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +267,17 @@ export function createServer({ config, token, store, clock = () => Date.now() })
             if (req.method !== "GET") return send(405, { fout: "alleen GET" });
             if (!tokenOk(req.headers.authorization, token)) return send(401, { fout: "token ontbreekt of klopt niet" });
             const now = clock();
-            if (u.pathname === "/v1/usage") return send(200, await store.usage(now));
-            return send(404, { fout: "onbekend pad; gebruik /v1/usage" });
+            if (u.pathname === "/v1/usage") return send(200, await store.usage(now, { ververs: u.searchParams.get("ververs") === "1" }));
+            if (u.pathname === "/v1/verloop") {
+                const account = u.searchParams.get("account");
+                const since = u.searchParams.get("sinds");
+                const limit = u.searchParams.get("max");
+                const max = limit === null ? 500 : Number(limit);
+                if (limit !== null && (!/^\d+$/.test(limit) || !Number.isSafeInteger(max) || max < 1)) return send(400, { fout: "max moet een positief geheel getal zijn" });
+                if (since !== null && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i.test(since) || !Number.isFinite(Date.parse(since)))) return send(400, { fout: "sinds moet een ISO-tijdstip met tijdzone zijn" });
+                return send(200, await store.verloop({ account, sinds: since === null ? null : new Date(since).toISOString(), max }));
+            }
+            return send(404, { fout: "onbekend pad; gebruik /v1/usage of /v1/verloop" });
         } catch (e) {
             send(500, { fout: "interne fout" });
         }
@@ -172,12 +290,12 @@ export function loadAll(configPath = DEFAULT_CONFIG_PATH) {
     const resolve = p => (path.isAbsolute(p) ? p : path.join(dir, p));
     const secrets = JSON.parse(fs.readFileSync(resolve(config.sync_bestand || "sync.json"), "utf8"));
     const token = fs.readFileSync(resolve(config.token_bestand || "token"), "utf8").trim();
-    return { config, secrets, token, cacheFile: resolve(config.cache_bestand || "cache.json") };
+    return { config, secrets, token, cacheFile: resolve(config.cache_bestand || "cache.json"), historyFile: resolve(config.historie_bestand || "historie.sqlite") };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-    const { config, secrets, token, cacheFile } = loadAll();
-    const store = createStore(config, secrets, { cacheFile });
+    const { config, secrets, token, cacheFile, historyFile } = loadAll();
+    const store = createStore(config, secrets, { cacheFile, historyFile });
     // One listener; with 0.0.0.0 the toegestaan list limits clients (loopback + tailnet), so
     // the service does not depend on Tailscale being up before it starts.
     const host = config.adres || "127.0.0.1", port = config.poort || 8787;

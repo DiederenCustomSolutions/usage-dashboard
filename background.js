@@ -731,6 +731,17 @@ function cs2WriteEnc(config, sub, obj, etag) {
 }
 
 // ETag read-modify-write op een versleutelde node, retry bij 412 (race).
+// v0.33.2: never let an older measurement replace a newer one. Per provider the
+// entry with the highest lastSynced wins (out-of-order reads/uploads).
+function cs2NewerSyncStatus(oldS, newS) {
+    const out = Object.assign({}, newS || {});
+    for (const k of Object.keys(oldS || {})) {
+        const o = oldS[k], n = out[k];
+        if (o && (!n || (o.lastSynced || 0) > (n.lastSynced || 0))) out[k] = o;
+    }
+    return out;
+}
+
 function cs2UpdateEnc(config, sub, mutator, attempts = 5) {
     return cs2ReadEnc(config, sub).then(({ obj, etag }) => {
         const next = mutator(Object.assign({}, obj)) || obj;
@@ -1298,7 +1309,7 @@ function pushUserDataToCloud(user) {
             if (cs2IsFirebase(config)) {
                 const writes = [
                     cs2UpdateEnc(config, `status/${profileId}`, (s) => {
-                        s.label = profileLabel; s.syncStatus = syncStatus; s.lastSeen = Date.now();
+                        s.label = profileLabel; s.syncStatus = cs2NewerSyncStatus(s.syncStatus, syncStatus); s.lastSeen = Date.now();
                         s.pcOnline = true; s.appVersion = extensionVersion();
                         delete s.lastError; return s;
                     }),

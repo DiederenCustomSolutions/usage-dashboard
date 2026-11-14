@@ -4019,6 +4019,31 @@ function cs2WriteEnc(config, sub, obj, etag) {
 }
 
 // ETag read-modify-write op een versleutelde node, retry bij 412 (race).
+// v0.33.2: never let an older measurement replace a newer one. Per provider the
+// entry with the highest lastSynced wins (out-of-order reads/uploads).
+function cs2NewerSyncStatus(oldS, newS) {
+    const out = Object.assign({}, newS || {});
+    for (const k of Object.keys(oldS || {})) {
+        const o = oldS[k], n = out[k];
+        if (o && (!n || (o.lastSynced || 0) > (n.lastSynced || 0))) out[k] = o;
+    }
+    return out;
+}
+
+// Merge freshly read profiles into what is shown: per profile and provider keep the
+// newest measurement, so a slow (older) read never jumps the tiles back.
+function mergeNewerProfiles(current, incoming) {
+    const out = {};
+    for (const pid of Object.keys(incoming || {})) {
+        const n = incoming[pid] || {}, o = (current || {})[pid];
+        if (!o) { out[pid] = n; continue; }
+        const merged = Object.assign({}, n, { syncStatus: cs2NewerSyncStatus(o.syncStatus, n.syncStatus) });
+        if ((o.lastSeen || 0) > (n.lastSeen || 0)) merged.lastSeen = o.lastSeen;
+        out[pid] = merged;
+    }
+    return out;
+}
+
 function cs2UpdateEnc(config, sub, mutator, attempts = 5) {
     return cs2ReadEnc(config, sub).then(({ obj, etag }) => {
         const next = mutator(Object.assign({}, obj)) || obj;
@@ -5451,7 +5476,7 @@ function renderMultiProfileCards() {
 
 function applyDesktopCloudDoc(doc) {
     if (doc.profiles && Object.keys(doc.profiles).length > 0) {
-        state.cloudProfiles = doc.profiles;
+        state.cloudProfiles = mergeNewerProfiles(state.cloudProfiles, doc.profiles);
     }
     if (!_dashCfgWriteInFlight && !_dashCfgWriteQueued) {
         state.dashboardConfig = normalizeDashboardConfig(doc.dashboardConfig);
@@ -5645,8 +5670,8 @@ function processNormalizedCloudDoc(doc, syncClient, isManual) {
         state.loginRequests = doc.loginRequests || {};
         state.loginLinks    = doc.loginLinks || {};
         if (doc.profiles && Object.keys(doc.profiles).length > 0) {
-            state.cloudProfiles = doc.profiles;
-            state.syncStatus    = aggregateProfileSyncStatus(doc.profiles);
+            state.cloudProfiles = mergeNewerProfiles(state.cloudProfiles, doc.profiles);
+            state.syncStatus    = aggregateProfileSyncStatus(state.cloudProfiles);
         } else {
             state.cloudProfiles = {};
             state.syncStatus    = doc.syncStatus || { claude: null, chatgpt: null };
@@ -5934,8 +5959,10 @@ function startFastPollingForRemoteSync(baseline) {
         }
 
         if (flagCleared && freshScrape) {
-            if (doc.profiles && Object.keys(doc.profiles).length) state.cloudProfiles = doc.profiles;
-            state.syncStatus   = aggregated;
+            if (doc.profiles && Object.keys(doc.profiles).length) {
+                state.cloudProfiles = mergeNewerProfiles(state.cloudProfiles, doc.profiles);
+                state.syncStatus   = aggregateProfileSyncStatus(state.cloudProfiles);
+            } else state.syncStatus = aggregated;
             state.userSettings = normalizeUserSettings(doc.settings || state.userSettings);
             if (doc.dashboardConfig) state.dashboardConfig = normalizeDashboardConfig(doc.dashboardConfig);
             if (Array.isArray(doc.logs)) { state.userLogs = doc.logs; state.userThreads = doc.threads || []; }

@@ -5,6 +5,7 @@
   "sync_bestand": "sync.json",
   "token_bestand": "token",
   "cache_bestand": "cache.json",
+  "historie_bestand": "historie.sqlite",
   "cache_s": 20,
   "leestijd_ms": 1500,
   "betrouwbaar_max_min": 15,
