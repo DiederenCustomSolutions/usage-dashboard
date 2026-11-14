@@ -164,25 +164,41 @@ try {
                     ORDER BY laatst_gezien DESC, id DESC LIMIT ?`).all(...args, max);
                 parentPort.postMessage({ id: message.id, result: { metingen: rows } });
             } else if (message.type === "verbruik") {
-                const { van, tot, groep, bron = null } = message;
+                const { van, tot, groep, bron = null, uurstart = null } = message;
                 // Only fixed column names enter SQL; all filter values are bound.
-                const fields = groep.filter(field => ["dag", "account", "model", "klus"].includes(field));
+                const fields = groep.filter(field => ["dag", "uur", "account", "model", "klus", "sessie"].includes(field));
                 const group = [...fields, "bron"].join(", ");
+                const extra = fields.includes("uur") || fields.includes("sessie");
+                // uur: clock hour (UTC), or with uurstart the whole hours since that instant (an integer).
+                const hour = uurstart === null ? "strftime('%Y-%m-%dT%H:00:00Z', tijd)"
+                    : "((CAST(strftime('%s', tijd) AS INTEGER) - CAST(strftime('%s', ?) AS INTEGER) + 360000000) / 3600 - 100000)";
+                const extras = [
+                    ...(extra ? ["ROUND(COALESCE(SUM(CASE WHEN context > 150000 THEN usd ELSE 0 END), 0), 4) AS groot_usd",
+                        "ROUND(COALESCE(SUM(CASE WHEN subagent THEN usd ELSE 0 END), 0), 4) AS subagent_usd"] : []),
+                    ...(fields.includes("sessie") ? ["MAX(titel) AS titel", "MAX(project) AS project",
+                        "MIN(tijd) AS eerste", "MAX(tijd) AS laatste"] : [])
+                ];
                 const rows = db.prepare(`WITH verbruik AS (
-                    SELECT substr(tijd, 1, 10) AS dag, 'claude' AS account, model,
-                        COALESCE(titel, project) AS klus, 'claude' AS bron, input, output, cache_lees,
+                    SELECT substr(tijd, 1, 10) AS dag, ${hour} AS uur, 'claude' AS account, model,
+                        COALESCE(titel, project) AS klus, sessie_id AS sessie, titel, project, tijd, subagent,
+                        COALESCE(input, 0) + COALESCE(cache_lees, 0) + COALESCE(cache_schrijf_5m, 0) + COALESCE(cache_schrijf_1u, 0) AS context,
+                        'claude' AS bron, input, output, cache_lees,
                         COALESCE(cache_schrijf_5m, 0) + COALESCE(cache_schrijf_1u, 0) AS cache_schrijf, prijs AS usd
                     FROM berichten WHERE substr(tijd, 1, 10) BETWEEN ? AND ?
                     UNION ALL
-                    SELECT substr(tijd, 1, 10) AS dag, account, model, klusnaam(werkmap) AS klus, 'codex' AS bron,
+                    SELECT substr(tijd, 1, 10) AS dag, ${hour} AS uur, account, model, klusnaam(werkmap) AS klus,
+                        sessie_id AS sessie, NULL AS titel, NULL AS project, tijd, 0 AS subagent,
+                        COALESCE(input, 0) AS context, 'codex' AS bron,
                         input, COALESCE(output, 0) + COALESCE(reasoning, 0) AS output, cached_input AS cache_lees,
                         0 AS cache_schrijf, usd
                     FROM codex WHERE substr(tijd, 1, 10) BETWEEN ? AND ?
                 ) SELECT ${group}, COUNT(*) AS regels, COALESCE(SUM(input), 0) AS input,
                     COALESCE(SUM(output), 0) AS output, COALESCE(SUM(cache_lees), 0) AS cache_lees,
-                    COALESCE(SUM(cache_schrijf), 0) AS cache_schrijf, ROUND(COALESCE(SUM(usd), 0), 4) AS usd
+                    COALESCE(SUM(cache_schrijf), 0) AS cache_schrijf, ROUND(COALESCE(SUM(usd), 0), 4) AS usd${extras.map(e => ", " + e).join("")}
                 FROM verbruik ${bron === null ? "" : "WHERE bron = ?"}
-                GROUP BY ${group} ORDER BY ${group}`).all(van, tot, van, tot, ...(bron === null ? [] : [bron]));
+                GROUP BY ${group} ORDER BY ${group}`).all(
+                    ...(uurstart === null ? [] : [uurstart]), van, tot,
+                    ...(uurstart === null ? [] : [uurstart]), van, tot, ...(bron === null ? [] : [bron]));
                 parentPort.postMessage({ id: message.id, result: { rijen: rows } });
             } else if (message.type === "klussen") {
                 const { sinds = null, max = 100 } = message;

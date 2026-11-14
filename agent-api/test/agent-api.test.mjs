@@ -1069,6 +1069,35 @@ test("HTTP verbruik: invalid dates, reversed or excessive range, unknown groups 
     assert.equal((await f.get(verbruikPeriode)).status, 200, "invalid input must not disable the worker");
 });
 
+test("HTTP verbruik: groep uur and sessie add hourly and per-session figures, additively", async t => {
+    const f = await innameFixture(t);
+    const berichten = [
+        { id: "u1", tijd: "2026-11-10T10:10:00Z", sessie_id: "s-aaa", titel: "Plan", project: "p1", model: "opus", input: 100000, cache_lees: 60000, prijs: 2 },
+        { id: "u2", tijd: "2026-11-10T10:50:00Z", sessie_id: "s-aaa", titel: "Plan", model: "opus", input: 10, prijs: 1, subagent: 1 },
+        { id: "u3", tijd: "2026-11-10T11:05:00Z", sessie_id: "s-aaa", titel: "Plan", model: "sonnet", input: 10, prijs: 0.5 },
+        { id: "u4", tijd: "2026-11-10T11:30:00Z", sessie_id: "s-bbb", titel: "Test", model: "haiku", input: 10, prijs: 0.25 }
+    ];
+    assert.equal((await (await f.post({ tabel: "berichten", rijen: berichten })).json()).nieuw, 4);
+    const base = "/v1/verbruik?van=2026-11-10&tot=2026-11-10&bron=claude";
+    const clock = await (await f.get(`${base}&groep=uur`)).json();
+    assert.deepEqual(clock.rijen.map(r => [r.uur, r.usd, r.groot_usd, r.subagent_usd]), [
+        ["2026-11-10T10:00:00Z", 3, 2, 1], ["2026-11-10T11:00:00Z", 0.75, 0, 0]]);
+    const shifted = await (await f.get(`${base}&groep=uur,model&uurstart=2026-11-10T09:30:00Z`)).json();
+    assert.deepEqual(shifted.rijen.map(r => [r.uur, r.model, r.usd]), [
+        [0, "opus", 2], [1, "opus", 1], [1, "sonnet", 0.5], [2, "haiku", 0.25]]);
+    const before = await (await f.get(`${base}&groep=uur&uurstart=2026-11-10T10:30:00Z`)).json();
+    assert.deepEqual(before.rijen.map(r => r.uur), [-1, 0, 1]);
+    const sessions = await (await f.get(`${base}&groep=sessie`)).json();
+    assert.deepEqual(sessions.rijen.map(r => [r.sessie, r.titel, r.regels, r.usd, r.groot_usd, r.subagent_usd, r.eerste, r.laatste]), [
+        ["s-aaa", "Plan", 3, 3.5, 2, 1, "2026-11-10T10:10:00Z", "2026-11-10T11:05:00Z"],
+        ["s-bbb", "Test", 1, 0.25, 0, 0, "2026-11-10T11:30:00Z", "2026-11-10T11:30:00Z"]]);
+    const plain = await (await f.get(`${base}&groep=dag`)).json();
+    assert.deepEqual(Object.keys(plain.rijen[0]), ["dag", "bron", "regels", "input", "output", "cache_lees", "cache_schrijf", "usd"]);
+    for (const params of ["groep=dag&uurstart=2026-11-10T09:30:00Z", "groep=uur&uurstart=nu", "groep=uur&uurstart=2026-11-10", "groep=uur,pc"]) {
+        assert.equal((await f.get(`${base}&${params}`)).status, 400, params);
+    }
+});
+
 test("HTTP klussen: newest snapshot per id, complete fields, start order and inclusive timezone filter", async t => {
     const f = await innameFixture(t);
     const job = { id: "job", klusmap: "C:\\werk\\klus", account: "account1", model: "sol", start: "2026-11-10T10:00:00Z", week_voor: 1, vijf_uur_voor: 2, status: "lopend" };
