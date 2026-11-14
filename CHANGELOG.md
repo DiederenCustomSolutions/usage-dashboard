@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [Unreleased]
+
+- **Usage-api bewaart nieuwe metingen in SQLite-historie**, inclusief resets en ChatGPT-reset-tegoeden. `GET /v1/verloop` leest het verloop per account; geen extra Firebase-lezingen of timers en historieproblemen houden usage-antwoorden niet op.
+
 ## [0.33.2] — 2026-11-12
 
 - **Refresh no longer jumps back to an older figure.** Cloud reads that arrive out of order (stream, refresh button, fast poll, backup poll) could replace a newer measurement with an older one. The dashboard now keeps the newest measurement per profile and provider, and the extension no longer overwrites a newer cloud measurement with an older upload.
