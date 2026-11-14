@@ -41,7 +41,7 @@ systemd-run --user --quiet --collect --unit="usage-inloglink-$p" --setenv=INLOG_
     --property=RuntimeMaxSec=$((m * 60 + 60)) node "$HERE/usage-inloglink.mjs" "$p" "$m"
 host=$("${TS:-tailscale}" status --json | python3 -c 'import sys,json; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-    journalctl --user -u "usage-inloglink-$p" -n 3 --no-pager -o cat | grep -q "actief op" && break
+    journalctl --user -u "usage-inloglink-$p" -n 3 --no-pager -o cat | grep "actief op" >/dev/null && break
     systemctl --user is-active --quiet "usage-inloglink-$p" || break
     sleep 1
 done

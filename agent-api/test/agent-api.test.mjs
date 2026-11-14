@@ -393,7 +393,7 @@ test("usage-inloglink: public Funnel link only for extern profiles; Funnel off a
     stub("systemd-run", `echo "systemd-run $*" >> "${log}"`);
     stub("journalctl", 'echo "inloglink x actief op 127.0.0.1:1, 30 min"');
     stub("openssl", 'n=$3; printf "%${n}s" "" | tr " " a; printf "%${n}s" "" | tr " " a; echo');
-    stub("python3", "echo agents.tail.ts.net");
+    stub("python3", "cat >/dev/null; echo agents.tail.ts.net");   // read stdin: else the upstream echo can get SIGPIPE (status 141) under pipefail
     stub("tailscale", `if [ "$1 $2" = "status --json" ]; then echo '{}'; exit 0; fi
 if [ "$1 $2" = "funnel status" ]; then echo "$FUNNEL_STATUS"; exit 0; fi
 echo "tailscale $*" >> "${log}"`);

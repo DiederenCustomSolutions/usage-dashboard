@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.36.1] — 2026-11-14
+
+- **Fixed a flaky test and a needless wait.** `usage-inloglink` could exit with status 141 (SIGPIPE under `pipefail`) when a stub in the test did not read stdin; the stub now reads it. In the script, the wait for "actief op" no longer uses `grep -q`, so an early-closing pipe cannot skip the `break`.
+
+---
+
 ## [0.35.0] — 2026-11-10
 
 - **Adding a measuring user is one step.** The profiles sidebar has an "Add measuring profile" button: fill in a name, the agents-pc creates a Chrome of its own for it and returns a login link. The same from the command line: `usage-gebruiker-toevoegen <name>`. The Chrome always starts with `--password-store=basic` and its own debug port; the pairing with the dashboard is set through the extension. Same encrypted `meta` route as the Log in button (`addRequests` / `addResults`), no timer.
