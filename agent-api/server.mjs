@@ -358,10 +358,15 @@ export function createServer({ config, token, store, innameFile = config.inname_
                     return send(400, { fout: "ongeldige periode; gebruik UTC-dagen en maximaal 400 dagen inclusief" });
                 }
                 const groep = [...new Set((u.searchParams.get("groep") ?? "dag,account").split(","))];
-                if (groep.some(field => !["dag", "account", "model", "klus"].includes(field))) return send(400, { fout: "groep moet dag, account, model of klus bevatten" });
+                if (groep.some(field => !["dag", "uur", "account", "model", "klus", "sessie"].includes(field))) return send(400, { fout: "groep moet dag, uur, account, model, klus of sessie bevatten" });
+                const uurstartRaw = u.searchParams.get("uurstart");
+                const uurstartMs = uurstartRaw === null ? null : Date.parse(uurstartRaw);
+                if (uurstartRaw !== null && (!groep.includes("uur") || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(uurstartRaw) || !Number.isFinite(uurstartMs))) {
+                    return send(400, { fout: "uurstart moet een ISO-tijdstip zijn en hoort bij groep uur" });
+                }
                 const bron = u.searchParams.get("bron");
                 if (bron !== null && !["claude", "codex"].includes(bron)) return send(400, { fout: "bron moet claude of codex zijn" });
-                const result = await store.verbruik({ van, tot, groep, bron });
+                const result = await store.verbruik({ van, tot, groep, bron, uurstart: uurstartMs === null ? null : new Date(uurstartMs).toISOString() });
                 if (result.fout) return send(503, { fout: "historie niet beschikbaar" });
                 return send(200, { van, tot, groep, rijen: result.rijen });
             }

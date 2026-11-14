@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.37.0] — 2026-11-14
+
+- **`GET /v1/verbruik` has two more groups: `uur` and `sessie`.** Additive; existing responses are unchanged. `uur` is the UTC clock hour; with `uurstart=<ISO instant>` it is the whole number of hours since that instant (for week charts). `sessie` groups on the session id. With either group the rows also carry `groot_usd` (messages with more than 150k context) and `subagent_usd`; `sessie` adds `titel`, `project`, `eerste` and `laatste`. Used by the Planner usage tab. Only usage-api needs a restart.
+
+---
+
 ## [0.36.1] — 2026-11-14
 
 - **Fixed a flaky test and a needless wait.** `usage-inloglink` could exit with status 141 (SIGPIPE under `pipefail`) when a stub in the test did not read stdin; the stub now reads it. In the script, the wait for "actief op" no longer uses `grep -q`, so an early-closing pipe cannot skip the `break`.
