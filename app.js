@@ -5604,6 +5604,19 @@ function loadCloudProfilesForDesktop() {
     });
 }
 
+function pairingQrSvg(url) {
+    try {
+        const qr = qrcode(0, "M");
+        qr.addData(new URL(url).href);
+        qr.make();
+        return qr.createSvgTag({ cellSize: 1, scalable: true }).replace("<svg ",
+            '<svg width="120" height="120" role="img" aria-label="QR Code" shape-rendering="crispEdges" style="display:block;margin-inline:auto;border-radius:4px;" ');
+    } catch {
+        // The text link remains available if the URL cannot be encoded as a QR code.
+        return "";
+    }
+}
+
 function openAddProfilePanel() {
     const panel = document.getElementById("add-profile-panel");
     if (panel) panel.style.display = "block";
@@ -5627,7 +5640,7 @@ function openAddProfilePanel() {
         if (config.provider) params.set("provider", config.provider);
         const fullUrl = `${hostUrl}/index.html?${params.toString()}`;
         if (urlEl) urlEl.textContent = fullUrl;
-        if (qrEl) qrEl.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(fullUrl)}" alt="QR" style="border-radius:4px;">`;
+        if (qrEl) qrEl.innerHTML = pairingQrSvg(fullUrl);
     });
 }
 
@@ -6317,8 +6330,7 @@ function renderMobileSyncSettings() {
             pwaLink.href = fullPwaUrl;
             const hostLabel = hostUrl.replace(/^https?:\/\//, "");
             pwaLink.innerHTML = `${hostLabel} <i class="fa-solid fa-up-right-from-square"></i>`;
-            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=${encodeURIComponent(fullPwaUrl)}`;
-            document.getElementById("sync-qrcode").innerHTML = `<img src="${qrUrl}" alt="QR Code" style="display: block; width: 130px; height: 130px;">`;
+            document.getElementById("sync-qrcode").innerHTML = pairingQrSvg(fullPwaUrl);
 
             // Vul het bewerkbare host-veld
             const hostInput = document.getElementById("sync-pwa-host");

@@ -14,6 +14,13 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [Nog niet uitgebracht]
+
+- **QR codes are made locally.** "Add profile" and "Mobile sync" no longer send the pairing link (with key) to an external QR service; `lib/qrcode.min.js` (qrcode-generator 1.4.4, MIT) draws an SVG.
+- **Webapp test runs without personal data** (fixture in `meetscripts/fixtures/`), plus a QR regression test.
+
+---
+
 ## [0.37.0] — 2026-11-14
 
 - **`GET /v1/verbruik` has two more groups: `uur` and `sessie`.** Additive; existing responses are unchanged. `uur` is the UTC clock hour; with `uurstart=<ISO instant>` it is the whole number of hours since that instant (for week charts). `sessie` groups on the session id. With either group the rows also carry `groot_usd` (messages with more than 150k context) and `subagent_usd`; `sessie` adds `titel`, `project`, `eerste` and `laatste`. Used by the Planner usage tab. Only usage-api needs a restart.

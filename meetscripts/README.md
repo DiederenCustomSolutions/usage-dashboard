@@ -42,8 +42,8 @@ Offline checks: `python -m unittest discover -s meetscripts -p test_collect.py`.
 `--home`, `--output` and `--now` allow reproducible fixture measurements without
 touching real hook state.
 
-After a real measurement, `node meetscripts/test-usage-state.cjs` checks schema,
-countdowns, view preferences and ordering without a browser or dependencies.
+`node meetscripts/test-usage-state.cjs` uses synthetic measurements to check
+schema, countdowns, preferences and ordering without a browser or dependencies.
 `node meetscripts/test-dashboard.cjs` runs the integration checks in headless
 Edge against a temporary localhost HTTP server and saves screenshots and a
 report in the parent task directory. It blocks external page requests and stops
