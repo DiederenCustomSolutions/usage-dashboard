@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname,'..','app.js'),'utf8');
-const data = JSON.parse(fs.readFileSync(path.join(__dirname,'..','usage-by-model.json'),'utf8'));
+const data = JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures','usage-by-model.fixture.json'),'utf8'));
 const storage = new Map();
 const tileEvents = {}, documentEvents = {};
 const classes = () => ({values:new Set(),toggle(name,on){if(on)this.values.add(name);else this.values.delete(name)}});
@@ -30,7 +30,7 @@ let checks = 0;
 function check(labelText,code) {assert.equal(run(code),true,labelText);checks++;}
 async function main() {
     context.sample=data;
-    check('Real measurement validates','validateUsageByModel(sample)');
+    check('Populated measurement validates','sample.SESSIES.length > 0 && validateUsageByModel(sample)');
     for (const mutation of ['d.generated="invalid"', 'd.SESSIES[0].lastTurn="invalid"', 'd.SESSIES=null']) check('Invalid schema rejected',`(()=>{const d=JSON.parse(JSON.stringify(sample));${mutation};return !validateUsageByModel(d)})()`);
     context.testAt=at;
     check('Full cache at last turn','updateUsageCache(testAt); true');
@@ -49,6 +49,7 @@ async function main() {
     storage.set('ud_usage_model',JSON.stringify({period:'day'}));
     await run('initUsageByModel()');
     assert.equal(requests.length,1); assert.equal(requests[0].options.cache,'no-store'); checks++;
+    check('Populated measurement loaded','usageByModelData === sample');
     check('Preferences restored',"usageModelState.period==='day'");
     tileEvents.click({target:{closest:()=>({dataset:{umPeriod:'day'}})}});
     tileEvents.click({target:{closest:()=>({dataset:{umPeriod:'7d'}})}});
@@ -65,6 +66,10 @@ async function main() {
     check('Rows per person, 7 days',"(()=>{usageModelState.period='7d';const r=usageRowsFromProfiles();return r.rows.length===2&&r.rows[0].segments.length===2&&r.rows[1].segments.length===1&&r.rows[1].extra[0]==='Fable limit 3% used'&&r.measuredAt===2})()");
     check('Last day uses the latest day with usage',"(()=>{usageModelState.period='day';const r=usageRowsFromProfiles();return r.rows[0].segments.length===1&&r.rows[0].segments[0].label==='Luna 6'})()");
     check('Selected profile filters rows',"(()=>{state.selectedProfileId='b';return usageRowsFromProfiles().rows.length===0})()");
+    context.emptySample={...data,SESSIES:[]};
+    context.fetch=async()=>({ok:true,json:async()=>context.emptySample});
+    await run('initUsageByModel()');
+    check('Empty measurement loaded','usageByModelData === emptySample && usageByModelData.SESSIES.length === 0');
     context.fetch=async()=>({ok:false});
     await run('initUsageByModel()');
     check('Missing JSON clears snapshot','usageByModelData===null');
