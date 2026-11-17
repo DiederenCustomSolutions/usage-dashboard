@@ -684,6 +684,12 @@ test("central schema: tables, columns, indexes and version 2 exist before ingest
         }
         assert.deepEqual(db.prepare("PRAGMA index_info(berichten_tijd)").all().map(r => r.name), ["tijd"]);
         assert.deepEqual(db.prepare("PRAGMA index_info(codex_account_tijd)").all().map(r => r.name), ["account", "tijd"]);
+        assert.deepEqual(db.prepare("PRAGMA index_info(codex_tijd)").all().map(r => r.name), ["tijd"]);
+        for (const table of ["berichten", "codex"]) {
+            const plan = db.prepare(`EXPLAIN QUERY PLAN SELECT * FROM ${table} WHERE tijd >= ? AND tijd < ?`)
+                .all("2026-11-10", "2026-11-11");
+            assert.ok(plan.some(row => row.detail.includes(`USING INDEX ${table}_tijd`)));
+        }
     });
 });
 
@@ -710,6 +716,52 @@ test("ingestion: all tables are idempotent, whitelist fields, stamp pc and audit
         });
     }
     assert.equal(f.state.reads, 0);
+});
+
+test("ingestion: a Codex price backfill changes only the missing price", async t => {
+    const f = await innameFixture(t);
+    const original = { id: "unpriced", tijd: "2026-11-10T10:00:00Z", account: "account1", model: "gpt-6.2-sol", input: 100, output: 20 };
+    const post = async rijen => {
+        const response = await f.post({ tabel: "codex", rijen });
+        assert.equal(response.status, 200);
+        return (await response.json()).nieuw;
+    };
+    const stored = () => withDatabase(f.historyFile, db => ({ ...db.prepare("SELECT * FROM codex WHERE id = ?").get(original.id) }));
+    const prices = async () => (await (await f.get("/v1/verbruik?van=2026-11-10&tot=2026-11-10&groep=model")).json()).rijen[0];
+    assert.equal(await post([original]), 1);
+    const before = await stored();
+    assert.equal(before.usd, null);
+    const unpriced = await prices();
+    assert.equal(unpriced.usd, null);
+    assert.equal(unpriced.regels_zonder_prijs, 1);
+    assert.equal(await post([{ ...original, usd: null }]), 0);
+    assert.deepEqual(await stored(), before);
+    const repriced = { ...original, tijd: "2026-11-11T10:00:00Z", account: "account2", input: 999, week_pct: 80, usd: 0.25 };
+    assert.equal(await post([repriced]), 0);
+    assert.deepEqual(await stored(), { ...before, usd: 0.25 });
+    assert.equal(await post([repriced, { ...repriced, usd: 1.5 }, { ...repriced, usd: null }]), 0);
+    assert.deepEqual(await stored(), { ...before, usd: 0.25 });
+    assert.deepEqual(await f.store.verloop(), { metingen: [] });
+    assert.deepEqual(await prices(), { ...unpriced, usd: 0.25, regels_zonder_prijs: 0 });
+});
+
+test("ingestion: waits for a short SQLite write lock and commits once", async t => {
+    const f = historyFixture(t), store = f.makeStore(); f.cleanup();
+    await store.verloop();
+    const { DatabaseSync } = await import("node:sqlite");
+    const lock = new DatabaseSync(f.historyFile);
+    lock.exec("BEGIN EXCLUSIVE");
+    const body = { tabel: "codex", pc: "test-pc", rijen: [{ id: "after-lock" }] };
+    const pending = store.inname(body);
+    let result;
+    try {
+        result = await Promise.race([pending, new Promise(resolve => setTimeout(resolve, 200))]);
+    } finally {
+        lock.close();
+    }
+    assert.equal(result, undefined, "inname should wait until the lock is released");
+    assert.equal((await pending).nieuw, 1);
+    assert.equal((await store.inname(body)).nieuw, 0);
 });
 
 test("jobs: snapshots share an id, fingerprint ignores pc, unknown fields and object key order", async t => {
@@ -964,14 +1016,16 @@ async function seedVerbruik(f) {
         { id: "b3", tijd: "2026-11-10T23:59:59Z", model: "nova", titel: null, project: "repo", output: 4, cache_lees: 2, cache_schrijf_5m: 2 },
         { id: "b4", tijd: "2026-11-11T12:00:00Z" },
         { id: "b5", tijd: "2026-11-12T23:59:59.999Z", model: "fable", titel: "", project: "geen-fallback", input: 8, output: 9, cache_lees: 1, cache_schrijf_5m: 1, cache_schrijf_1u: 1, prijs: 0.75 },
-        { id: "outside-before", tijd: "2026-11-09T23:59:59Z", input: 999 }
+        { id: "outside-before", tijd: "2026-11-09T23:59:59.999999Z", input: 999 },
+        { id: "outside-after", tijd: "2026-11-13T00:00:00.000Z", input: 999 }
     ];
     const codex = [
-        { id: "c1", tijd: "2026-11-10T00:00:00Z", account: "account1", model: "sol", werkmap: "C:\\GitRepos\\build", input: 200, output: 20, reasoning: 7, cached_input: 80, usd: 0.20002 },
+        { id: "c1", tijd: "2026-11-10T00:00:00.000Z", account: "account1", model: "sol", werkmap: "C:\\GitRepos\\build", input: 200, output: 20, reasoning: 7, cached_input: 80, usd: 0.20002 },
         { id: "c2", tijd: "2026-11-10T12:00:00Z", account: "account1", model: "sol", werkmap: "/home/build", input: 40, reasoning: 3, usd: 0.00004 },
-        { id: "c3", tijd: "2026-11-10T12:00:00Z", account: "claude", model: "sol", werkmap: "/home\\mixed" },
-        { id: "c4", tijd: "2026-11-11T12:00:00Z", account: "account2", model: "luna", werkmap: "/tmp/other/", input: 5, output: 6, cached_input: 2, usd: 1.23456 },
+        { id: "c3", tijd: "2026-11-10T12:00:00Z", account: "claude", model: "gpt-6.2-astra", werkmap: "/home\\mixed" },
+        { id: "c4", tijd: "2026-11-11T12:00:00Z", account: "account2", model: "luna", werkmap: "/tmp/other/", input: 5, output: 6, cached_input: 2, usd: 0 },
         { id: "c5", tijd: "2026-11-12T23:59:59.999Z", account: "account1", model: "sol", input: 10, reasoning: 4, cached_input: 3, usd: 0.5 },
+        { id: "outside-before", tijd: "2026-11-09T23:59:59.999Z", input: 999 },
         { id: "outside-after", tijd: "2026-11-13T00:00:00Z", input: 999 }
     ];
     for (const [tabel, rijen] of [["berichten", berichten], ["codex", codex]]) {
@@ -979,7 +1033,9 @@ async function seedVerbruik(f) {
     }
 }
 const verbruikPeriode = "/v1/verbruik?van=2026-11-10&tot=2026-11-12";
-const totals = (regels, input, output, cache_lees, cache_schrijf, usd) => ({ regels, input, output, cache_lees, cache_schrijf, usd });
+const totals = (regels, input, output, cache_lees, cache_schrijf, usd, regels_zonder_prijs = 0) => ({
+    regels, input, output, cache_lees, cache_schrijf, usd, regels_zonder_prijs
+});
 
 test("HTTP verbruik: three inclusive UTC days, correct sums, nulls and separate sources", async t => {
     const f = await innameFixture(t);
@@ -988,20 +1044,20 @@ test("HTTP verbruik: three inclusive UTC days, correct sums, nulls and separate 
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
         van: "2026-11-10", tot: "2026-11-12", groep: ["dag", "account"], rijen: [
-            { dag: "2026-11-10", account: "account1", bron: "codex", ...totals(2, 240, 30, 80, 0, 0.2001) },
-            { dag: "2026-11-10", account: "claude", bron: "claude", ...totals(3, 150, 14, 22, 17, 0.1235) },
-            { dag: "2026-11-10", account: "claude", bron: "codex", ...totals(1, 0, 0, 0, 0, 0) },
-            { dag: "2026-11-11", account: "account2", bron: "codex", ...totals(1, 5, 6, 2, 0, 1.2346) },
-            { dag: "2026-11-11", account: "claude", bron: "claude", ...totals(1, 0, 0, 0, 0, 0) },
-            { dag: "2026-11-12", account: "account1", bron: "codex", ...totals(1, 10, 4, 3, 0, 0.5) },
+            { dag: "2026-11-10", account: "account1", bron: "codex", ...totals(2, 240, 20, 80, 0, 0.2001) },
+            { dag: "2026-11-10", account: "claude", bron: "claude", ...totals(3, 150, 14, 22, 17, 0.1235, 1) },
+            { dag: "2026-11-10", account: "claude", bron: "codex", ...totals(1, 0, 0, 0, 0, null, 1) },
+            { dag: "2026-11-11", account: "account2", bron: "codex", ...totals(1, 5, 6, 2, 0, 0) },
+            { dag: "2026-11-11", account: "claude", bron: "claude", ...totals(1, 0, 0, 0, 0, null, 1) },
+            { dag: "2026-11-12", account: "account1", bron: "codex", ...totals(1, 10, 0, 3, 0, 0.5) },
             { dag: "2026-11-12", account: "claude", bron: "claude", ...totals(1, 8, 9, 1, 2, 0.75) }
         ]
     });
     const byDay = await (await f.get(`${verbruikPeriode}&groep=dag`)).json();
     assert.equal(byDay.rijen.length, 6);
     assert.deepEqual(byDay.rijen.slice(0, 2), [
-        { dag: "2026-11-10", bron: "claude", ...totals(3, 150, 14, 22, 17, 0.1235) },
-        { dag: "2026-11-10", bron: "codex", ...totals(3, 240, 30, 80, 0, 0.2001) }
+        { dag: "2026-11-10", bron: "claude", ...totals(3, 150, 14, 22, 17, 0.1235, 1) },
+        { dag: "2026-11-10", bron: "codex", ...totals(3, 240, 20, 80, 0, 0.2001, 1) }
     ]);
     assert.equal(f.state.reads, 0, "read endpoints must not fetch Firebase");
 });
@@ -1012,13 +1068,13 @@ test("HTTP verbruik: all group fields, path styles, source filter and requested 
     const result = await (await f.get(`${verbruikPeriode}&groep=dag,account,model,klus`)).json();
     assert.deepEqual(result.groep, ["dag", "account", "model", "klus"]);
     assert.deepEqual(result.rijen, [
-        { dag: "2026-11-10", account: "account1", model: "sol", klus: "build", bron: "codex", ...totals(2, 240, 30, 80, 0, 0.2001) },
+        { dag: "2026-11-10", account: "account1", model: "sol", klus: "build", bron: "codex", ...totals(2, 240, 20, 80, 0, 0.2001) },
         { dag: "2026-11-10", account: "claude", model: "fable", klus: "plan", bron: "claude", ...totals(2, 150, 10, 20, 15, 0.1235) },
-        { dag: "2026-11-10", account: "claude", model: "nova", klus: "repo", bron: "claude", ...totals(1, 0, 4, 2, 2, 0) },
-        { dag: "2026-11-10", account: "claude", model: "sol", klus: "mixed", bron: "codex", ...totals(1, 0, 0, 0, 0, 0) },
-        { dag: "2026-11-11", account: "account2", model: "luna", klus: "other", bron: "codex", ...totals(1, 5, 6, 2, 0, 1.2346) },
-        { dag: "2026-11-11", account: "claude", model: null, klus: null, bron: "claude", ...totals(1, 0, 0, 0, 0, 0) },
-        { dag: "2026-11-12", account: "account1", model: "sol", klus: null, bron: "codex", ...totals(1, 10, 4, 3, 0, 0.5) },
+        { dag: "2026-11-10", account: "claude", model: "gpt-6.2-astra", klus: "mixed", bron: "codex", ...totals(1, 0, 0, 0, 0, null, 1) },
+        { dag: "2026-11-10", account: "claude", model: "nova", klus: "repo", bron: "claude", ...totals(1, 0, 4, 2, 2, null, 1) },
+        { dag: "2026-11-11", account: "account2", model: "luna", klus: "other", bron: "codex", ...totals(1, 5, 6, 2, 0, 0) },
+        { dag: "2026-11-11", account: "claude", model: null, klus: null, bron: "claude", ...totals(1, 0, 0, 0, 0, null, 1) },
+        { dag: "2026-11-12", account: "account1", model: "sol", klus: null, bron: "codex", ...totals(1, 10, 0, 3, 0, 0.5) },
         { dag: "2026-11-12", account: "claude", model: "fable", klus: "", bron: "claude", ...totals(1, 8, 9, 1, 2, 0.75) }
     ]);
     for (const bron of ["claude", "codex"]) {
@@ -1027,9 +1083,9 @@ test("HTTP verbruik: all group fields, path styles, source filter and requested 
     }
     const byAccount = await (await f.get(`${verbruikPeriode}&groep=account&bron=codex`)).json();
     assert.deepEqual(byAccount.rijen, [
-        { account: "account1", bron: "codex", ...totals(3, 250, 34, 83, 0, 0.7001) },
-        { account: "account2", bron: "codex", ...totals(1, 5, 6, 2, 0, 1.2346) },
-        { account: "claude", bron: "codex", ...totals(1, 0, 0, 0, 0, 0) }
+        { account: "account1", bron: "codex", ...totals(3, 250, 20, 83, 0, 0.7001) },
+        { account: "account2", bron: "codex", ...totals(1, 5, 6, 2, 0, 0) },
+        { account: "claude", bron: "codex", ...totals(1, 0, 0, 0, 0, null, 1) }
     ]);
     const reordered = await (await f.get(`${verbruikPeriode}&groep=account,dag`)).json();
     assert.deepEqual(reordered.rijen.map(row => [row.account, row.dag]), [
@@ -1058,6 +1114,9 @@ test("HTTP verbruik: default seven-day period uses UTC and tot, empty results an
     assert.equal((await f.get(`/v1/verbruik?van=${start(399)}&tot=2026-11-12`)).status, 200);
     assert.equal((await f.get(`/v1/verbruik?van=${start(400)}&tot=2026-11-12`)).status, 400);
     assert.equal((await f.get("/v1/verbruik?van=2024-02-29&tot=2024-02-29")).status, 200);
+    await f.post({ tabel: "berichten", rijen: [{ id: "last-day", tijd: "9999-12-31T23:59:59.999Z", input: 7 }] });
+    const lastDay = await (await f.get("/v1/verbruik?van=9999-12-31&tot=9999-12-31")).json();
+    assert.equal(lastDay.rijen[0].input, 7);
 });
 
 test("HTTP verbruik: invalid dates, reversed or excessive range, unknown groups and sources fail safely", async t => {
@@ -1092,7 +1151,7 @@ test("HTTP verbruik: groep uur and sessie add hourly and per-session figures, ad
         ["s-aaa", "Plan", 3, 3.5, 2, 1, "2026-11-10T10:10:00Z", "2026-11-10T11:05:00Z"],
         ["s-bbb", "Test", 1, 0.25, 0, 0, "2026-11-10T11:30:00Z", "2026-11-10T11:30:00Z"]]);
     const plain = await (await f.get(`${base}&groep=dag`)).json();
-    assert.deepEqual(Object.keys(plain.rijen[0]), ["dag", "bron", "regels", "input", "output", "cache_lees", "cache_schrijf", "usd"]);
+    assert.deepEqual(Object.keys(plain.rijen[0]), ["dag", "bron", "regels", "input", "output", "cache_lees", "cache_schrijf", "usd", "regels_zonder_prijs"]);
     for (const params of ["groep=dag&uurstart=2026-11-10T09:30:00Z", "groep=uur&uurstart=nu", "groep=uur&uurstart=2026-11-10", "groep=uur,pc"]) {
         assert.equal((await f.get(`${base}&${params}`)).status, 400, params);
     }

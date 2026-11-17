@@ -45,7 +45,7 @@ function fail() {
 
 try {
     const { DatabaseSync } = await import("node:sqlite");
-    db = new DatabaseSync(workerData.bestand, { timeout: 0 });
+    db = new DatabaseSync(workerData.bestand, { timeout: 5000 });
     db.function("klusnaam", { deterministic: true }, werkmap => werkmap === null ? null
         : String(werkmap).replace(/[\\/]+$/, "").split(/[\\/]/).at(-1));
     db.exec(`
@@ -79,6 +79,7 @@ try {
             week_pct REAL, ontvangen_op TEXT
         );
         CREATE INDEX IF NOT EXISTS codex_account_tijd ON codex(account, tijd);
+        CREATE INDEX IF NOT EXISTS codex_tijd ON codex(tijd);
         CREATE TABLE IF NOT EXISTS klussen (
             rij INTEGER PRIMARY KEY, vingerafdruk TEXT UNIQUE, pc TEXT, id TEXT,
             klusmap TEXT, account TEXT, model TEXT, start TEXT, eind TEXT,
@@ -101,6 +102,7 @@ try {
         const names = [...fields, "pc", "ontvangen_op", ...(table === "klussen" ? ["vingerafdruk"] : [])];
         return [table, db.prepare(`INSERT OR IGNORE INTO ${table} (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)];
     }));
+    const fillCodexPrice = db.prepare("UPDATE codex SET usd = ? WHERE id = ? AND usd IS NULL");
     const audit = db.prepare("INSERT OR IGNORE INTO inname_log (pc, tabel, tijd, ontvangen, nieuw, positie) VALUES (?, ?, ?, ?, ?, ?)");
     const previousCodex = db.prepare("SELECT vijf_uur_pct, week_pct FROM metingen WHERE account = ? AND bron = 'codex' AND laatst_gezien < ? ORDER BY laatst_gezien DESC LIMIT 1");
     const codexMeasurement = db.prepare(`INSERT OR IGNORE INTO metingen
@@ -141,6 +143,10 @@ try {
                         if (tabel === "klussen") args.push(createHash("sha256").update(JSON.stringify(values)).digest("hex"));
                         const changes = Number(ingest[tabel].run(...args).changes);
                         nieuw += changes;
+                        // Price backfills do not count as new rows or generate limit measurements.
+                        if (tabel === "codex" && !changes && row.usd != null) {
+                            fillCodexPrice.run(args[columns.codex.indexOf("usd")], row.id);
+                        }
                         if (tabel === "codex" && changes && (row.week_pct != null || row.vijf_uur_pct != null)) {
                             const five = row.vijf_uur_pct ?? null, week = row.week_pct ?? null;
                             const previous = previousCodex.get(row.account ?? null, row.tijd ?? null);
@@ -165,6 +171,10 @@ try {
                 parentPort.postMessage({ id: message.id, result: { metingen: rows } });
             } else if (message.type === "verbruik") {
                 const { van, tot, groep, bron = null, uurstart = null } = message;
+                // UTC date prefixes sort before every timestamp on that day, with or without fractions.
+                // The terminal bound sorts after year 9999 without using the signed ISO year +010000.
+                const nextDay = tot === "9999-12-31" ? "9999-12-32"
+                    : new Date(Date.parse(tot) + 86400e3).toISOString().slice(0, 10);
                 // Only fixed column names enter SQL; all filter values are bound.
                 const fields = groep.filter(field => ["dag", "uur", "account", "model", "klus", "sessie"].includes(field));
                 const group = [...fields, "bron"].join(", ");
@@ -184,21 +194,22 @@ try {
                         COALESCE(input, 0) + COALESCE(cache_lees, 0) + COALESCE(cache_schrijf_5m, 0) + COALESCE(cache_schrijf_1u, 0) AS context,
                         'claude' AS bron, input, output, cache_lees,
                         COALESCE(cache_schrijf_5m, 0) + COALESCE(cache_schrijf_1u, 0) AS cache_schrijf, prijs AS usd
-                    FROM berichten WHERE substr(tijd, 1, 10) BETWEEN ? AND ?
+                    FROM berichten WHERE tijd >= ? AND tijd < ?
                     UNION ALL
                     SELECT substr(tijd, 1, 10) AS dag, ${hour} AS uur, account, model, klusnaam(werkmap) AS klus,
                         sessie_id AS sessie, NULL AS titel, NULL AS project, tijd, 0 AS subagent,
                         COALESCE(input, 0) AS context, 'codex' AS bron,
-                        input, COALESCE(output, 0) + COALESCE(reasoning, 0) AS output, cached_input AS cache_lees,
+                        input, output, cached_input AS cache_lees,
                         0 AS cache_schrijf, usd
-                    FROM codex WHERE substr(tijd, 1, 10) BETWEEN ? AND ?
+                    FROM codex WHERE tijd >= ? AND tijd < ?
                 ) SELECT ${group}, COUNT(*) AS regels, COALESCE(SUM(input), 0) AS input,
                     COALESCE(SUM(output), 0) AS output, COALESCE(SUM(cache_lees), 0) AS cache_lees,
-                    COALESCE(SUM(cache_schrijf), 0) AS cache_schrijf, ROUND(COALESCE(SUM(usd), 0), 4) AS usd${extras.map(e => ", " + e).join("")}
+                    COALESCE(SUM(cache_schrijf), 0) AS cache_schrijf, ROUND(SUM(usd), 4) AS usd,
+                    COUNT(*) - COUNT(usd) AS regels_zonder_prijs${extras.map(e => ", " + e).join("")}
                 FROM verbruik ${bron === null ? "" : "WHERE bron = ?"}
                 GROUP BY ${group} ORDER BY ${group}`).all(
-                    ...(uurstart === null ? [] : [uurstart]), van, tot,
-                    ...(uurstart === null ? [] : [uurstart]), van, tot, ...(bron === null ? [] : [bron]));
+                    ...(uurstart === null ? [] : [uurstart]), van, nextDay,
+                    ...(uurstart === null ? [] : [uurstart]), van, nextDay, ...(bron === null ? [] : [bron]));
                 parentPort.postMessage({ id: message.id, result: { rijen: rows } });
             } else if (message.type === "klussen") {
                 const { sinds = null, max = 100 } = message;
