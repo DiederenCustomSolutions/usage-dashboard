@@ -11,11 +11,6 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 - **Re-sent Codex rows fill a missing price.** Only an empty `usd` is filled; nothing else is overwritten.
 - **Day filter uses the index** (`tijd >= van AND tijd < day after tot`, new index `codex_tijd`).
 - **SQLite waits 5 s on a lock** instead of failing the inname at once.
-
----
-
-## [Nog niet uitgebracht]
-
 - **QR codes are made locally.** "Add profile" and "Mobile sync" no longer send the pairing link (with key) to an external QR service; `lib/qrcode.min.js` (qrcode-generator 1.4.4, MIT) draws an SVG.
 - **Webapp test runs without personal data** (fixture in `meetscripts/fixtures/`), plus a QR regression test.
 
