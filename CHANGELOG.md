@@ -4,6 +4,16 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [Nog niet uitgebracht]
+
+- **`/v1/verbruik` counts Codex output once.** Reasoning tokens are already part of `output`; they were added a second time.
+- **Unknown cost is no longer $0.** Each group has `regels_zonder_prijs`; `usd` is `null` when no row has a price.
+- **Re-sent Codex rows fill a missing price.** Only an empty `usd` is filled; nothing else is overwritten.
+- **Day filter uses the index** (`tijd >= van AND tijd < day after tot`, new index `codex_tijd`).
+- **SQLite waits 5 s on a lock** instead of failing the inname at once.
+
+---
+
 ## [0.37.0] — 2026-11-14
 
 - **`GET /v1/verbruik` has two more groups: `uur` and `sessie`.** Additive; existing responses are unchanged. `uur` is the UTC clock hour; with `uurstart=<ISO instant>` it is the whole number of hours since that instant (for week charts). `sessie` groups on the session id. With either group the rows also carry `groot_usd` (messages with more than 150k context) and `subagent_usd`; `sessie` adds `titel`, `project`, `eerste` and `laatste`. Used by the Planner usage tab. Only usage-api needs a restart.
