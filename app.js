@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.42.1";
+const APP_VERSION = "0.43.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -73,7 +73,7 @@ function renderBuildInfoStrip() {
             }
         }
     } catch (outerErr) {
-        slot.textContent = "build-info fout: " + (outerErr.message || outerErr);
+        slot.textContent = "Build information unavailable.";
     }
 }
 
@@ -144,50 +144,53 @@ function renderSyncDevices() {
     }
     renderSelfUpdateButton();
 
-    const row = (name, version, when, extra) => {
-        const outdated = version && version !== "?" && version !== APP_VERSION;
+    const row = (name, version, when, latest) => {
+        const outdated = deviceVersionBehind(version, latest);
         const versionColor = outdated ? "var(--accent-yellow)" : "var(--accent-green)";
         return `<div style="display:flex; justify-content:space-between; gap:8px; padding:3px 0; border-bottom:1px solid rgba(255,255,255,0.05);">
             <span style="color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</span>
             <span style="white-space:nowrap;">
-                <strong style="color:${versionColor}; font-family:monospace;">v${version || "?"}</strong>
+                <strong style="color:${versionColor}; font-family:monospace;">v${escapeHtmlSafe(version || "?")}</strong>
                 <span style="color:var(--text-muted); margin-left:6px;">${when}</span>
-                ${outdated ? ` <i class="fa-solid fa-triangle-exclamation" style="color:var(--accent-yellow);" title="Runs an older version than this dashboard (v${APP_VERSION})"></i>` : ""}
-                ${extra || ""}
+                ${outdated ? ` <i class="fa-solid fa-triangle-exclamation" style="color:var(--accent-yellow);" title="Latest known version: v${escapeHtmlSafe(latest)}"></i>` : ""}
             </span>
         </div>`;
     };
 
-    const thisDevice = row(
+    const thisDevice = latest => row(
         `<i class="fa-solid fa-${DB.isExtension ? "desktop" : "mobile-screen-button"}"></i> This device`,
-        APP_VERSION, "now"
+        runningVersion(), "now", latest
     );
 
     getActiveSyncConfig().then((cfg) => {
-        if (!cfg || !cfg.binId) { slot.innerHTML = thisDevice + `<p class="desc" style="margin-top:6px;">Not paired — no other devices.</p>`; return; }
+        if (!cfg || !cfg.binId) { slot.innerHTML = thisDevice(newestKnownVersion([])) + `<p class="desc" style="margin-top:6px;">No paired devices.</p>`; return; }
 
         cs2ReadState(cfg).then((doc) => {
-            const rows = [thisDevice];
             const profiles = (doc && doc.profiles) || {};
+            const clients = (doc && doc.clients) || {};
+            const devices = [...Object.values(profiles), ...Object.values(clients)];
+            const latest = newestKnownVersion(devices);
+            const rows = [thisDevice(latest)];
             Object.keys(profiles).forEach((pid) => {
                 const p = profiles[pid] || {};
-                rows.push(row(`<i class="fa-solid fa-desktop"></i> ${p.label || pid}`, p.appVersion, p.lastSeen ? formatTimeAgo(p.lastSeen) : "—"));
+                rows.push(row(`<i class="fa-solid fa-desktop"></i> ${escapeHtmlSafe(p.label || pid)}`, p.appVersion, p.lastSeen ? formatTimeAgo(p.lastSeen) : "—", latest));
             });
-            const clients = (doc && doc.clients) || {};
+            if (doc && document.getElementById("tab-settings").classList.contains("active")) {
+                renderHealth(profiles, clients);
+            }
             Object.keys(clients).forEach((cid) => {
                 if (cid === pwaDeviceId()) return;   // dat is dit toestel zelf
                 const c = clients[cid] || {};
-                rows.push(row(`<i class="fa-solid fa-mobile-screen-button"></i> ${c.label || cid}`, c.appVersion, c.lastSeen ? formatTimeAgo(c.lastSeen) : "—"));
+                rows.push(row(`<i class="fa-solid fa-mobile-screen-button"></i> ${escapeHtmlSafe(c.label || cid)}`, c.appVersion, c.lastSeen ? formatTimeAgo(c.lastSeen) : "—", latest));
             });
 
-            const anyOutdated = [...Object.values(profiles), ...Object.values(clients)]
-                .some(d => d && d.appVersion && d.appVersion !== APP_VERSION);
+            const anyOutdated = devices.some(d => deviceVersionBehind(d?.appVersion, latest));
             if (anyOutdated) {
                 rows.push(`<p class="desc" style="margin-top:8px; color:var(--accent-yellow);">
-                    <i class="fa-solid fa-circle-info"></i> A device runs an older version. On a phone: close the app fully and reopen it. On that PC: open the dashboard and click the version label at the top (<b>Update</b>).</p>`);
+                    <i class="fa-solid fa-circle-info"></i> Reopen outdated phones. Update outdated PCs.</p>`);
             }
             slot.innerHTML = rows.join("");
-        }).catch(() => { slot.innerHTML = thisDevice + `<p class="desc" style="margin-top:6px;">Could not read the other devices.</p>`; });
+        }).catch(() => { slot.innerHTML = thisDevice(newestKnownVersion([])) + `<p class="desc" style="margin-top:6px;">Could not read the other devices.</p>`; });
     });
 }
 
@@ -277,6 +280,7 @@ let state = {
     // Multi-profile: slaat alle profielen op uit de cloud bin
     // { "pid-abc1": { label, syncStatus, lastSeen }, ... }
     cloudProfiles: {},
+    cloudClients: {},
     // Login links (v0.34.0): meta.loginRequests / meta.loginLinks, keyed by profile id.
     loginRequests: {},
     loginLinks: {},
@@ -488,6 +492,15 @@ function compareVersions(a, b) {
 function runningVersion() {
     try { if (DB.isExtension) return chrome.runtime.getManifest().version; } catch (e) {}
     return APP_VERSION;
+}
+
+function newestKnownVersion(devices) {
+    const versions = [runningVersion(), latestPublishedVersion, ...devices.map(d => d?.appVersion)];
+    return versions.reduce((a, b) => compareVersions(a, b) >= 0 ? a : b);
+}
+
+function deviceVersionBehind(version, latest) {
+    return version && version !== "?" && compareVersions(version, latest) < 0;
 }
 
 function selfUpdateAvailable() {
@@ -2504,7 +2517,7 @@ function updateScraperStatusLabels() {
     if (logBox && typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
         chrome.storage.local.get(["lt_sync_logs"], (res) => {
             const logs = res.lt_sync_logs || [];
-            const newText = logs.length > 0 ? logs.join("\n") : "No log data available. Click sync or open a settings tab to generate logs.";
+            const newText = logs.length > 0 ? logs.join("\n") : "No sync entries yet.";
             if (logBox.textContent !== newText) {
                 logBox.textContent = newText;
             }
@@ -2645,7 +2658,7 @@ function renderLogsList() {
         }).join("");
         if (filteredLogs.length > shownLogs.length) {
             rows += `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">
-                Showing the newest ${shownLogs.length} of ${filteredLogs.length} entries — use search to find older ones.
+                Newest ${shownLogs.length} of ${filteredLogs.length}. Search older entries.
             </td></tr>`;
         }
         tableBody.innerHTML = rows;
@@ -2654,10 +2667,113 @@ function renderLogsList() {
 
 
 
+// A paired viewer's state.syncStatus combines PCs. Use their individual snapshots.
+// Older single-source documents can have measurements without a profile ID.
+function measuringSources(cloud = state.cloudProfiles) {
+    const sources = { ...cloud };
+    const viewer = isSyncClient()?.enabled;
+    const local = state.syncStatus || {};
+    const hasLocalData = PROVIDER_ORDER.some(provider => hasProviderData(provider, local));
+    const hasProfiles = Object.keys(sources).length > 0;
+    const includeLocal = viewer ? !hasProfiles && hasLocalData :
+        state.myProfileId || hasLocalData || (DB.isExtension && !hasProfiles);
+    if (includeLocal) {
+        const id = state.myProfileId || "local";
+        const remote = sources[id];
+        const syncStatus = cs2NewerSyncStatus(remote?.syncStatus, local);
+        sources[id] = {
+            ...remote,
+            label: viewer ? "Measuring source" : state.myProfileLabel || "This profile",
+            syncStatus,
+            lastSeen: remote?.lastSeen || newestProfileSync([{ syncStatus }]),
+            appVersion: viewer ? remote?.appVersion : runningVersion()
+        };
+    }
+    return Object.entries(sources).map(([id, source]) => ({ ...source, label: source?.label || id }));
+}
+
+function compactDuration(ms) {
+    const minutes = Math.floor(Math.max(0, ms) / 60000);
+    const hours = Math.floor(minutes / 60);
+    if (hours >= 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+    if (hours) return `${hours}h ${minutes % 60}m`;
+    return minutes ? `${minutes}m` : "<1m";
+}
+
+function renderAccounts() {
+    const now = Date.now();
+    const rows = [];
+    measuringSources().forEach(profile => {
+        PROVIDER_ORDER.forEach(provider => {
+            if (!hasProviderData(provider, profile.syncStatus)) return;
+            const sync = profile.syncStatus[provider];
+            const monthly = provider === "chatgpt" ? profile.syncStatus.codex : null;
+            const limits = computeProviderPace(provider, sync, now, monthly)
+                .filter(s => s.capPct != null && s.capPct !== "" && Number.isFinite(Number(s.capPct)));
+            const used = period => {
+                const section = limits.find(s => s.period === period);
+                return section ? `${clampPct(100 - section.capPct)}%` : "—";
+            };
+            const resets = limits.map(s => s.remainingMs).filter(Number.isFinite);
+            const next = Math.min(...resets.filter(ms => ms > 0));
+            const capacity = limits.map(s => Number(s.capPct));
+            // Older message-count snapshots only supplied the tile's overall percentage.
+            if (!capacity.length && Number.isFinite(sync?.pctRemaining)) capacity.push(sync.pctRemaining);
+            const flags = [];
+            if (limits.some(s => Number(s.capPct) < s.timePct)) flags.push("Ahead of pace");
+            const syncTimes = [sync, monthly].map(s => s?.lastSynced).filter(t => t > 0);
+            const age = now - Math.min(...syncTimes);
+            if (age > 30 * 60000) flags.push(`Stale ${compactDuration(age)}`);
+            const errorProvider = profile.lastError?.provider;
+            if (loginErrorNeedsLogin(profile.lastError) &&
+                (errorProvider === provider || (errorProvider === "codex" && provider === "chatgpt"))) {
+                flags.push("Logged out?");
+            }
+            rows.push({
+                name: `${profile.label} · ${PROVIDER_META[provider].name}`,
+                headroom: capacity.length ? Math.max(0, Math.min(100, ...capacity)) : null,
+                session: used("session"), week: used("week"), month: used("month"),
+                next: Number.isFinite(next) ? `in ${compactDuration(next)}` : resets.length ? "Due now" : "—",
+                flags
+            });
+        });
+    });
+    rows.sort((a, b) => (b.headroom ?? -1) - (a.headroom ?? -1) || a.name.localeCompare(b.name));
+    document.getElementById("accounts-body").innerHTML = rows.map((r, index) => {
+        const bar = r.headroom === null ? "—" :
+            `<progress max="100" value="${r.headroom}" aria-label="Remaining capacity"></progress> ${Math.round(r.headroom)}%`;
+        const best = index === 0 && r.headroom !== null ? '<span class="account-flag best">Best</span> ' : "";
+        const flags = r.flags.map(flag => `<span class="account-flag">${escapeHtmlSafe(flag)}</span>`).join(" ");
+        return `<tr><th scope="row">${escapeHtmlSafe(r.name)}${r.month === "—" ? "" : `<small>Month used ${r.month}</small>`}</th>
+            <td>${r.session}</td><td>${bar}</td><td>${r.week}</td><td>${escapeHtmlSafe(r.next)}</td><td>${best}${flags}</td></tr>`;
+    }).join("") || '<tr><td colspan="6" class="table-empty">No account measurements yet.</td></tr>';
+}
+
+function renderHealth(profiles = state.cloudProfiles, clients = state.cloudClients) {
+    const sources = measuringSources(profiles);
+    const newest = newestKnownVersion([...sources, ...Object.values(clients)]);
+    const now = Date.now();
+    const row = (source, label) => {
+        const age = source.lastSeen ? now - source.lastSeen : Infinity;
+        const status = age < 10 * 60000 ? "recent" : age < 60 * 60000 ? "away" : "offline";
+        const when = Number.isFinite(age) ? `${escapeHtmlSafe(compactDuration(age))} ago` : "Never seen";
+        const version = deviceVersionBehind(source.appVersion, newest) ? `<span class="account-flag">Old version · v${escapeHtmlSafe(source.appVersion)}</span>` : "";
+        const login = loginErrorNeedsLogin(source.lastError) ? '<span class="account-flag">Logged out?</span>' : "";
+        return `<li><strong>${escapeHtmlSafe(label)}</strong><span class="health-age ${status}">${when}</span>${login}${version}</li>`;
+    };
+    const rows = sources.map(s => row(s, s.label));
+    Object.entries(clients).forEach(([id, client]) => {
+        if (deviceVersionBehind(client?.appVersion, newest)) rows.push(row(client, client.label || id));
+    });
+    document.getElementById("health-sources").innerHTML = rows.join("") || "<li>No measuring sources yet.</li>";
+}
+
 /* ==========================================================================
    ANALYTICS CHART
    ========================================================================== */
 function renderAnalyticsChart() {
+    if (!document.getElementById("local-log").open ||
+        !document.getElementById("tab-analytics").classList.contains("active")) return;
     const ctx = document.getElementById("usage-chart");
     if (!ctx) return;
     
@@ -2892,11 +3008,19 @@ function setupEventListeners() {
 
             // Build info + apparatenlijst verversen wanneer Settings open gaat
             if (paneId === "tab-settings") {
+                renderHealth();
                 renderBuildInfoStrip();
                 renderSyncDevices();
             }
+            if (paneId === "tab-analytics") {
+                renderAccounts();
+                renderAnalyticsChart();
+            }
         });
     });
+
+    document.getElementById("local-log").addEventListener("toggle", renderAnalyticsChart);
+    document.getElementById("btn-mobile-refresh").addEventListener("click", () => refreshAll(true));
 
     // B. Authentication Forms
     const authForm = document.getElementById("auth-form");
@@ -3200,7 +3324,7 @@ function setupEventListeners() {
         if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
             chrome.storage.local.set({ lt_sync_logs: [] }, () => {
                 const logBox = document.getElementById("sync-debug-logs");
-                if (logBox) logBox.innerHTML = "Logboek geleegd.";
+                if (logBox) logBox.textContent = "Sync log cleared.";
             });
         }
     });
@@ -4421,6 +4545,9 @@ function renderProfileBar() {
         // Cache voor de (synchrone) multi-profiel renderer
         state.myProfileId = myId || null;
         state.myProfileLabel = myLabel;
+        // Both desktop and PWA data updates reach this point with the local identity resolved.
+        if (document.getElementById("tab-analytics").classList.contains("active")) renderAccounts();
+        if (document.getElementById("tab-settings").classList.contains("active")) renderHealth();
 
         if (!hasSyncConfig && profileIds.length === 0) {
             bar.style.display = "none";
@@ -4717,9 +4844,9 @@ function paceSectionHTML(title, cls, capPct, timePct, resetLabel) {
 
 // Claude lopende sessie: relatief "Xh Ym" → timePct t.o.v. window.
 // elapsedMs: verstreken tijd (ms) since scrape — trekt af zodat weergave live klopt.
-function parseClaudeSessionTime(resetSession, windowMs, elapsedMs = 0, resetSessionAbsoluteTs = null) {
+function parseClaudeSessionTime(resetSession, windowMs, elapsedMs = 0, resetSessionAbsoluteTs = null, now = Date.now()) {
     let timePct = 0, timerText = "Fully Free";
-    const now = Date.now();
+    let remainingMs = null;
 
     // Absolute timestamp beschikbaar (opgeslagen in content.js bij scrape-tijd) → gebruik direct.
     if (resetSessionAbsoluteTs) {
@@ -4732,7 +4859,7 @@ function parseClaudeSessionTime(resetSession, windowMs, elapsedMs = 0, resetSess
             timerText = h > 0 ? `${h}h ${m}m` : `${m}m`;
         }
         timePct = Math.min(100, (adjustedMs / windowMs) * 100);
-        return { timePct, timerText };
+        return { timePct, timerText, remainingMs: adjustedMs };
     }
 
     // Fallback: relatieve string + elapsed-correctie (voor data zonder absolute ts).
@@ -4745,6 +4872,7 @@ function parseClaudeSessionTime(resetSession, windowMs, elapsedMs = 0, resetSess
         if (mMatch) totalMs += parseInt(mMatch[1]) * 60000;
         if (totalMs > 0) {
             const adjustedMs = Math.max(0, totalMs - elapsedMs);
+            remainingMs = adjustedMs;
             if (adjustedMs === 0) {
                 timerText = "Resetting…";
             } else {
@@ -4757,30 +4885,33 @@ function parseClaudeSessionTime(resetSession, windowMs, elapsedMs = 0, resetSess
             timerText = rs || timerText;
         }
     }
-    return { timePct, timerText };
+    return { timePct, timerText, remainingMs };
 }
 
 // Claude weekly: dagnaam / tomorrow / today / relatief "6d 17u" (EN+NL).
 function parseClaudeWeeklyTime(resetWeekly, now, resetWeeklyAbsoluteTs = null) {
     let timePct = 0, timerText = "Tuesday 06:00";
+    let remainingMs = null;
     const weekMs = 7 * 24 * 60 * 60 * 1000;
 
     // Exacte tijdstempel uit Claude's eigen API → geen tekstparsing, geen tijdzone-gokwerk.
     if (resetWeeklyAbsoluteTs) {
         const diffMs = Math.max(0, resetWeeklyAbsoluteTs - now);
         return {
+            remainingMs: diffMs,
             timePct: Math.min(100, (diffMs / weekMs) * 100),
             timerText: diffMs === 0 ? "Resetting…" : formatWeeklyTimeMs(diffMs)
         };
     }
 
-    if (!resetWeekly) return { timePct, timerText };
+    if (!resetWeekly) return { timePct, timerText, remainingMs };
     const dayMatch = resetWeekly.match(/(mon|tue|wed|thu|fri|sat|sun|maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag|zondag)\s+(\d{1,2}:\d{2}\s*(?:am|pm)?)/i);
     const tomorrowMatch = resetWeekly.match(/(?:tomorrow|morgen)\s+(?:at|om)?\s*(\d{1,2}):(\d{2})\s*(am|pm)?/i);
     const todayMatch = resetWeekly.match(/(?:today|vandaag)\s+(?:at|om)?\s*(\d{1,2}):(\d{2})\s*(am|pm)?/i);
     if (dayMatch) {
         const resetMs = getNextWeeklyResetMs(dayMatch[1], dayMatch[2]);
         const diffMs = resetMs - now;
+        remainingMs = Math.max(0, diffMs);
         if (diffMs > 0) { timePct = (diffMs / weekMs) * 100; timerText = formatWeeklyTimeMs(diffMs); }
     } else if (tomorrowMatch || todayMatch) {
         const mt = tomorrowMatch || todayMatch;
@@ -4788,10 +4919,11 @@ function parseClaudeWeeklyTime(resetWeekly, now, resetWeeklyAbsoluteTs = null) {
         const ampm = (mt[3] || "").toUpperCase();
         if (ampm === "PM" && h < 12) h += 12;
         if (ampm === "AM" && h === 12) h = 0;
-        const d = new Date();
+        const d = new Date(now);
         if (tomorrowMatch) d.setDate(d.getDate() + 1);
         d.setHours(h, m, 0, 0);
         const diffMs = d.getTime() - now;
+        remainingMs = Math.max(0, diffMs);
         if (diffMs > 0) { timePct = (diffMs / weekMs) * 100; timerText = formatWeeklyTimeMs(diffMs); }
     } else {
         timerText = resetWeekly
@@ -4800,35 +4932,38 @@ function parseClaudeWeeklyTime(resetWeekly, now, resetWeeklyAbsoluteTs = null) {
         const tm = timerText.match(/(?:(\d+)\s*d(?:ag(?:en)?|ay)?s?)?\s*(?:(\d+)\s*(?:h(?:r|r?s|ours?)?|u(?:ur|ren?)?))?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?\s*(?:(\d+)\s*s(?:ec(?:onds?)?)?)?/i);
         if (tm && (tm[1] || tm[2] || tm[3] || tm[4])) {
             const diffMs = ((parseInt(tm[1] || 0) * 86400) + (parseInt(tm[2] || 0) * 3600) + (parseInt(tm[3] || 0) * 60) + parseInt(tm[4] || 0)) * 1000;
+            remainingMs = Math.max(0, diffMs);
             if (diffMs > 0) { timePct = (diffMs / weekMs) * 100; timerText = formatWeeklyTimeMs(diffMs); }
         }
     }
-    return { timePct, timerText };
+    return { timePct, timerText, remainingMs };
 }
 
 // ChatGPT 5h: "Reset 13:54" → tijd tot doel (vandaag/morgen).
 function parseChatgpt5hTime(reset5h, now) {
     let timePct = 0, timerText = "Active";
-    if (!reset5h) return { timePct, timerText };
+    let remainingMs = null;
+    if (!reset5h) return { timePct, timerText, remainingMs };
     const match = reset5h.match(/(\d{1,2})[:.](\d{2})\s*(am|pm)?/i);
-    if (!match) { return { timePct, timerText: reset5h }; }
+    if (!match) { return { timePct, timerText: reset5h, remainingMs }; }
     let hours = parseInt(match[1]);
     const mins = parseInt(match[2]);
     const ampm = (match[3] || "").toLowerCase();
     if (ampm === "pm" && hours !== 12) hours += 12;
     if (ampm === "am" && hours === 12) hours = 0;
-    const target = new Date();
+    const target = new Date(now);
     target.setHours(hours, mins, 0, 0);
     let diffMs = target.getTime() - now;
     if (diffMs < -30 * 60 * 1000) { target.setDate(target.getDate() + 1); diffMs = target.getTime() - now; }
+    remainingMs = Math.max(0, diffMs);
     if (diffMs > 0) { timePct = Math.min(100, (diffMs / (5 * 60 * 60 * 1000)) * 100); timerText = formatTimeMs(diffMs); }
-    return { timePct, timerText };
+    return { timePct, timerText, remainingMs };
 }
 
 // ChatGPT: exacte tijdstippen uit de API (sinds 0.27.12) gaan voor; de tekst is het vangnet
 // voor oudere metingen. Zelfde weergave als Claude ("3h 9m", "1d 17u").
 function chatgpt5hTime(sync, now) {
-    if (sync && sync.reset5hAbsoluteTs) return parseClaudeSessionTime("", 5 * 60 * 60 * 1000, 0, sync.reset5hAbsoluteTs);
+    if (sync && sync.reset5hAbsoluteTs) return parseClaudeSessionTime("", 5 * 60 * 60 * 1000, 0, sync.reset5hAbsoluteTs, now);
     return parseChatgpt5hTime(sync && sync.reset5h, now);
 }
 function chatgptWeeklyTime(sync, now) {
@@ -4843,6 +4978,7 @@ function chatgptMonthlyTime(sync, now) {
     }
     const diffMs = Math.max(0, sync.resetMonthlyAbsoluteTs - now);
     return {
+        remainingMs: diffMs,
         timePct: Math.min(100, (diffMs / monthMs) * 100),
         timerText: diffMs === 0 ? "Resetting…" : formatWeeklyTimeMs(diffMs)
     };
@@ -4850,8 +4986,9 @@ function chatgptMonthlyTime(sync, now) {
 
 // Datum-gebaseerde reset ("1 jul 2026 23:24") → timePct t.o.v. windowMs (week of maand).
 function parseDateResetTime(resetStr, now, windowMs) {
+    let remainingMs = null;
     let timePct = 0, timerText = (resetStr || "").replace(/^(?:resets?|herstelt)\s*/i, "").trim() || "—";
-    if (!resetStr) return { timePct, timerText };
+    if (!resetStr) return { timePct, timerText, remainingMs };
     const months = { jan: 0, feb: 1, mar: 2, mrt: 2, apr: 3, may: 4, mei: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, okt: 9, nov: 10, dec: 11 };
 
     let day, monthName, year, hours = 0, mins = 0, ampm = "";
@@ -4864,13 +5001,13 @@ function parseDateResetTime(resetStr, now, windowMs) {
     if (mB && months[(mB[1] || "").toLowerCase().substring(0, 3)] !== undefined) {
         monthName = (mB[1] || "").toLowerCase().substring(0, 3);
         day = parseInt(mB[2]);
-        year = mB[3] ? parseInt(mB[3]) : new Date().getFullYear();
+        year = mB[3] ? parseInt(mB[3]) : new Date(now).getFullYear();
         hours = parseInt(mB[4]); mins = parseInt(mB[5]);
         ampm = (mB[6] || "").toLowerCase();
     } else if (mA) {
         day = parseInt(mA[1]);
         monthName = (mA[2] || "").toLowerCase().substring(0, 3);
-        year = mA[3] ? parseInt(mA[3]) : new Date().getFullYear();
+        year = mA[3] ? parseInt(mA[3]) : new Date(now).getFullYear();
         hours = mA[4] ? parseInt(mA[4]) : 0; mins = mA[5] ? parseInt(mA[5]) : 0;
         ampm = (mA[6] || "").toLowerCase();
     }
@@ -4880,42 +5017,51 @@ function parseDateResetTime(resetStr, now, windowMs) {
         if (ampm === "am" && hours === 12) hours = 0;
         const target = new Date(year, months[monthName], day, hours, mins, 0, 0);
         const diffMs = target.getTime() - now;
+        remainingMs = Math.max(0, diffMs);
         if (diffMs > 0) { timePct = Math.min(100, (diffMs / windowMs) * 100); timerText = formatWeeklyTimeMs(diffMs); }
     }
-    return { timePct, timerText };
+    return { timePct, timerText, remainingMs };
 }
 
 // Berekent alle pace-secties voor een (provider × snapshot).
 // monthlySync = de losse maandelijkse limiet (intern syncStatus.codex), alleen voor chatgpt.
 function computeProviderPace(provider, sync, now, monthlySync) {
     const sections = [];
+    function addWindow(period, title, capPct, clock) {
+        const timer = `<span class="font-mono">${escapeHtmlSafe(clock.timerText)}</span>`;
+        sections.push({
+            period, title, capPct, timePct: clock.timePct, remainingMs: clock.remainingMs,
+            resetLabel: period === "month" ? timer : `in ${timer}`
+        });
+    }
     sync = sync || {};
     if (provider === "claude") {
         const windowMs  = (state.userSettings.claude.windowHours || 5) * 3600000;
         const elapsed   = sync.lastSynced ? Math.max(0, now - sync.lastSynced) : 0;
-        const s = parseClaudeSessionTime(sync.resetSession, windowMs, elapsed, sync.resetSessionAbsoluteTs || null);
+        const s = parseClaudeSessionTime(sync.resetSession, windowMs, elapsed, sync.resetSessionAbsoluteTs || null, now);
         const w = parseClaudeWeeklyTime(sync.resetWeekly, now, sync.resetWeeklyAbsoluteTs || null);
-        sections.push({ title: "Current Session (Pace)", capPct: sync.pctRemaining, timePct: s.timePct, resetLabel: `in <span class="font-mono">${escapeHtmlSafe(s.timerText)}</span>` });
-        sections.push({ title: "Weekly Limit (Pace)", capPct: sync.pctRemainingWeekly, timePct: w.timePct, resetLabel: `in <span class="font-mono">${escapeHtmlSafe(w.timerText)}</span>` });
+        addWindow("session", "Current Session (Pace)", sync.pctRemaining, s);
+        addWindow("week", "Weekly Limit (Pace)", sync.pctRemainingWeekly, w);
     } else if (provider === "chatgpt") {
         // Betaald account: 5h + weekly. Gratis/personal: maandelijks. Toon wat aanwezig is.
         if (sync.pctRemaining5h !== undefined && sync.pctRemaining5h !== null) {
             const five = chatgpt5hTime(sync, now);
-            sections.push({ title: "5 Hour Limit (Pace)", capPct: sync.pctRemaining5h, timePct: five.timePct, resetLabel: `in <span class="font-mono">${escapeHtmlSafe(five.timerText)}</span>` });
+            addWindow("session", "5 Hour Limit (Pace)", sync.pctRemaining5h, five);
         }
         if (sync.pctRemainingWeekly !== undefined && sync.pctRemainingWeekly !== null) {
             const wk = chatgptWeeklyTime(sync, now);
-            sections.push({ title: "Weekly Limit (Pace)", capPct: sync.pctRemainingWeekly, timePct: wk.timePct, resetLabel: `in <span class="font-mono">${escapeHtmlSafe(wk.timerText)}</span>` });
+            addWindow("week", "Weekly Limit (Pace)", sync.pctRemainingWeekly, wk);
         }
         if (monthlySync && monthlySync.pctRemainingMonthly !== undefined && monthlySync.pctRemainingMonthly !== null) {
             const mo = chatgptMonthlyTime(monthlySync, now);
-            sections.push({ title: "Monthly Limit (Pace)", capPct: monthlySync.pctRemainingMonthly, timePct: mo.timePct, resetLabel: `<span class="font-mono">${escapeHtmlSafe(mo.timerText)}</span>` });
+            addWindow("month", "Monthly Limit (Pace)", monthlySync.pctRemainingMonthly, mo);
         }
     } else if (provider === "gemini") {
-        sections.push({ title: "Usage (Pace)", capPct: sync.limitReached ? 0 : 100, timePct: 0, resetLabel: sync.limitReached ? "limit reached" : "-" });
+        sections.push({ period: "usage", title: "Usage (Pace)", capPct: sync.limitReached ? 0 : 100, timePct: 0, resetLabel: sync.limitReached ? "limit reached" : "-" });
     } else if (provider === "zai") {
         const timeLeftMs = sync.reset5hAt ? Math.max(0, sync.reset5hAt - now) : 0;
         sections.push({
+            period: "session", remainingMs: sync.reset5hAt ? timeLeftMs : null,
             title: "5 Hour Limit (Pace)",
             capPct: sync.pctRemaining5h ?? sync.pctRemaining,
             timePct: sync.reset5hAt ? Math.min(100, (timeLeftMs / (5 * 60 * 60 * 1000)) * 100) : 0,
@@ -4969,9 +5115,9 @@ function buildSnapshotCard(provider, profile) {
     // Only a week limit (no 5h, no month): the big ring shows the week, no extra donut.
     const paceSections = computeProviderPace(provider, sync, now, monthlySync);
     const hasVal = s => !!s && s.capPct !== undefined && s.capPct !== null;
-    const fiveSec = paceSections.find(s => /^(5 Hour|Current Session)/.test(s.title) && hasVal(s));
-    const weekSec = paceSections.find(s => /^Weekly/.test(s.title) && hasVal(s));
-    const monthSec = paceSections.find(s => /^Monthly/.test(s.title) && hasVal(s));
+    const fiveSec = paceSections.find(s => s.period === "session" && hasVal(s));
+    const weekSec = paceSections.find(s => s.period === "week" && hasVal(s));
+    const monthSec = paceSections.find(s => s.period === "month" && hasVal(s));
     const weekOnly = !fiveSec && !monthSec && !!weekSec;
     if (weekOnly) pct = weekSec.capPct;
     const pctNum = (pct === undefined || pct === null) ? 100 : Math.max(0, Math.min(100, pct));
@@ -5000,7 +5146,7 @@ function buildSnapshotCard(provider, profile) {
     const timerHTML = timeNum > 0
         ? `<circle class="progress-ring__timer" r="${rt}" cx="65" cy="65" style="stroke-dasharray:${circT} ${circT}; stroke-dashoffset:${circT - ((100 - timeNum) / 100) * circT};"/>`
         : "";
-    const ringIs5h = !!ringSec && /^(5 Hour|Current Session)/.test(ringSec.title);
+    const ringIs5h = ringSec?.period === "session";
     const weekHTML = weekOnly ? "" : weekDonutHTML(meta.cls, weekSec);
 
     return `
@@ -5937,7 +6083,8 @@ function renderMultiProfileCards() {
 }
 
 function applyDesktopCloudDoc(doc) {
-    if (doc.profiles && Object.keys(doc.profiles).length > 0) {
+    state.cloudClients = doc.clients || {};
+    if (doc.profiles) {
         state.cloudProfiles = mergeNewerProfiles(state.cloudProfiles, doc.profiles);
     }
     if (!_dashCfgWriteInFlight && !_dashCfgWriteQueued) {
@@ -6146,6 +6293,7 @@ function processNormalizedCloudDoc(doc, syncClient, isManual) {
         state.loginLinks    = doc.loginLinks || {};
         state.addRequests   = doc.addRequests || {};
         state.addResults    = doc.addResults || {};
+        state.cloudClients  = doc.clients || {};
         if (doc.profiles && Object.keys(doc.profiles).length > 0) {
             state.cloudProfiles = mergeNewerProfiles(state.cloudProfiles, doc.profiles);
             state.syncStatus    = aggregateProfileSyncStatus(state.cloudProfiles);
@@ -6435,10 +6583,14 @@ function startFastPollingForRemoteSync(baseline) {
         }
 
         if (flagCleared && freshScrape) {
+            state.cloudClients = doc.clients || {};
             if (doc.profiles && Object.keys(doc.profiles).length) {
                 state.cloudProfiles = mergeNewerProfiles(state.cloudProfiles, doc.profiles);
                 state.syncStatus   = aggregateProfileSyncStatus(state.cloudProfiles);
-            } else state.syncStatus = aggregated;
+            } else {
+                state.cloudProfiles = {};
+                state.syncStatus = aggregated;
+            }
             state.userSettings = normalizeUserSettings(doc.settings || state.userSettings);
             if (doc.dashboardConfig) state.dashboardConfig = normalizeDashboardConfig(doc.dashboardConfig);
             if (Array.isArray(doc.logs)) { state.userLogs = doc.logs; state.userThreads = doc.threads || []; }
@@ -6553,7 +6705,7 @@ function updateMobileSyncIndicator(isSuccess) {
             }
         }
         if (statusDesc) {
-            statusDesc.innerHTML = `This dashboard is linked live to the desktop extension.<br><strong style="color: var(--accent-green); display: inline-flex; align-items: center; gap: 4px; margin-top: 8px;"><i class="fa-solid fa-circle-check"></i> Last successful sync: ${formattedTime}</strong>`;
+            statusDesc.textContent = `Last sync: ${formattedTime}`;
         }
     } else {
         if (liveSyncHeader) {
@@ -6567,7 +6719,7 @@ function updateMobileSyncIndicator(isSuccess) {
             }
         }
         if (statusDesc) {
-            statusDesc.innerHTML = `This dashboard is linked live to the desktop extension.<br><strong style="color: var(--accent-red); display: inline-flex; align-items: center; gap: 4px; margin-top: 8px;"><i class="fa-solid fa-circle-exclamation"></i> Sync failed (retry active). Last sync: ${formattedTime}</strong><br><button type="button" id="btn-sync-failed-help" class="btn-small" style="margin-top: 8px; font-size: 0.72rem; padding: 4px 8px;"><i class="fa-solid fa-wrench"></i> Check versions &amp; update</button>`;
+            statusDesc.innerHTML = `<strong style="color: var(--accent-red); display: inline-flex; align-items: center; gap: 4px; margin-top: 8px;"><i class="fa-solid fa-circle-exclamation"></i> Retrying. Last sync: ${formattedTime}</strong><br><button type="button" id="btn-sync-failed-help" class="btn-small" style="margin-top: 8px; font-size: 0.72rem; padding: 4px 8px;"><i class="fa-solid fa-wrench"></i> Check versions &amp; update</button>`;
             const helpBtn = document.getElementById("btn-sync-failed-help");
             if (helpBtn) helpBtn.addEventListener("click", openVersionsAndUpdateBlock);
         }
@@ -6883,7 +7035,7 @@ function applyMobileSyncUI() {
     const refreshAllBtn = document.getElementById("btn-sync-all");
     if (refreshAllBtn) {
         refreshAllBtn.style.display = "flex";
-        refreshAllBtn.title = "Ververs cloud gegevens";
+        refreshAllBtn.title = "Refresh cloud data";
     }
 
     const settingsLimitsForm = document.getElementById("settings-limits-form");
@@ -6921,43 +7073,12 @@ function applyMobileSyncUI() {
         });
     }
     
-    const statusBoxes = document.querySelectorAll(".scraper-status-list .status-item-box");
-    if (statusBoxes.length > 0) {
-        statusBoxes.forEach((box, idx) => {
-            if (idx === 0) {
-                box.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <strong>Cloud Sync Status:</strong>
-                        <span class="badge badge-success"><i class="fa-solid fa-cloud"></i> Actief</span>
-                    </div>
-                    <p id="settings-mobile-sync-desc" class="desc mt-2">This dashboard is live linked to the desktop extension.</p>
-                    <button type="button" id="btn-mobile-refresh" class="btn-primary w-100 mt-3" style="padding: 10px 16px; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
-                        <i class="fa-solid fa-arrows-rotate"></i> Ververs handmatig
-                    </button>
-                `;
-                
-                const btnRefresh = document.getElementById("btn-mobile-refresh");
-                if (btnRefresh) {
-                    btnRefresh.addEventListener("click", () => refreshAll(true));
-                }
-            } else if (box.id === "sync-devices-box") {
-                box.style.display = "";
-            } else {
-                box.style.display = "none";
-            }
-        });
-    }
-
-    /* Het blok "Versions & devices" hangt in het Mobile Sync-paneel, en dat paneel wordt op
-       de telefoon in zijn geheel verborgen (koppelen doe je op de PC). Daardoor was op de
-       telefoon geen versienummer en geen Force update-knop meer te zien — precies het
-       apparaat waar je ze het hardst nodig hebt. Verplaats het blok daarom naar het paneel
-       dat de telefoon wél toont. */
+    document.getElementById("settings-scraper").hidden = true;
+    const clientPanel = document.getElementById("settings-client-sync");
+    clientPanel.hidden = false;
     const devicesBox = document.getElementById("sync-devices-box");
-    const visiblePanel = statusBoxes[0] && statusBoxes[0].parentElement;
-    if (devicesBox && visiblePanel && devicesBox.parentElement !== visiblePanel) {
-        visiblePanel.appendChild(devicesBox);
-        devicesBox.style.display = "";
+    if (devicesBox && devicesBox.parentElement !== clientPanel) {
+        clientPanel.appendChild(devicesBox);
         renderBuildInfoStrip();
         renderSyncDevices();
     }
