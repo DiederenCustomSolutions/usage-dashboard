@@ -4,6 +4,11 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.43.1] — 2026-11-18
+
+- New app icons: full logo for phone and PWA, round (maskable) for Android, simple ring for tab and extension.
+- Reset timer sits inside the rings (5h and week).
+
 ## [0.43.0] — 2026-11-18
 
 - Analyze: accounts table across all profiles, sorted by headroom, with Best, Ahead of pace, Stale and Logged out flags.
