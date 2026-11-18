@@ -2395,7 +2395,7 @@ function renderDashboardProgress() {
 
     if (monthlySync && monthlySync.pctRemainingMonthly !== undefined && monthlySync.pctRemainingMonthly !== null) {
         const monthPct = Math.max(0, Math.min(100, monthlySync.pctRemainingMonthly));
-        const m = codexMonthlyTime(monthlySync, now);
+        const m = parseDateResetTime(monthlySync.resetMonthly, now, 31 * 24 * 60 * 60 * 1000);
         const monthTimerEl = document.getElementById("month-timer-chatgpt");
         if (monthTimerEl) monthTimerEl.innerText = m.timerText;
         if (secMonth) secMonth.style.display = "";
@@ -3586,8 +3586,7 @@ function chatgptUsageInPageFetch() {
                 monthly = {
                     pctRemainingMonthly: left(month),
                     pctRemaining: left(month),
-                    resetMonthlyAbsoluteTs: Number.isFinite(tsMonth) ? tsMonth : undefined,
-                    resetMonthly: Number.isFinite(tsMonth) ? "Reset " + day(tsMonth) : "",
+                    resetMonthly: isNaN(tsMonth) ? "" : "Reset " + day(tsMonth),
                     source: "api",
                     summary: `Via API: ${left(month)}% maandlimiet over.`
                 };
@@ -3910,11 +3909,11 @@ const SYNC_PROVIDERS = {
             .catch(() => null);
         },
         write(binId, doc) {
-            return fetch(`https://api.npoint.io/${binId}`, {
+            return relayAttempt(() => fetch(`https://api.npoint.io/${binId}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(doc)
-            }).then(res => { if (!res.ok) throw new Error(`HTTP Fout: ${res.status}`); return true; });
+            }).then(res => { if (!res.ok) throw new Error(`HTTP Fout: ${res.status}`); return true; }));
         }
     },
 
@@ -3990,6 +3989,51 @@ function cs2PruneLogs(logs) {
     return out;
 }
 
+// Lees één versleutelde node -> {obj, etag}. obj = {} als afwezig/onleesbaar.
+function cs2ReadEnc(config, sub) {
+    return fetch(cs2Url(config.binId, sub) + `?nocache=${Date.now()}`, {
+        cache: "no-store",
+        headers: { "X-Firebase-ETag": "true" }
+    }).then(r => {
+        const etag = r.headers.get("ETag");
+        return r.json().then(raw => {
+            let obj = {};
+            if (raw && raw.data) { try { obj = JSON.parse(CryptoSync.decrypt(raw.data, config.pairingKey)); } catch (e) {} }
+            return { obj, etag };
+        }).catch(() => ({ obj: {}, etag }));
+    });
+}
+
+// Schrijf versleutelde node. etag null -> onvoorwaardelijk. -> {ok}|{conflict}
+function cs2WriteEnc(config, sub, obj, etag) {
+    const headers = { "Content-Type": "application/json" };
+    if (etag) headers["if-match"] = etag;
+    const body = JSON.stringify({ data: CryptoSync.encrypt(JSON.stringify(obj), config.pairingKey) });
+    return fetch(cs2Url(config.binId, sub), { method: "PUT", headers, body }).then(r => {
+        if (r.status === 412) return { conflict: true };   // race → cs2UpdateEnc herleest + retry
+        if (!r.ok) throw new Error("cs2 write " + r.status);
+        return { ok: true };
+    }).catch(err => {
+        // Vangnet: faalt de conditionele write door een netwerk/CORS-fout (géén 412),
+        // schrijf dan onvoorwaardelijk zodat data niet stil verloren gaat.
+        if (!etag) throw err;
+        return fetch(cs2Url(config.binId, sub), { method: "PUT", headers: { "Content-Type": "application/json" }, body })
+            .then(r2 => { if (!r2.ok) throw new Error("cs2 write(uncond) " + r2.status); return { ok: true }; });
+    });
+}
+
+// ETag read-modify-write op een versleutelde node, retry bij 412 (race).
+// v0.33.2: never let an older measurement replace a newer one. Per provider the
+// entry with the highest lastSynced wins (out-of-order reads/uploads).
+function cs2NewerSyncStatus(oldS, newS) {
+    const out = Object.assign({}, newS || {});
+    for (const k of Object.keys(oldS || {})) {
+        const o = oldS[k], n = out[k];
+        if (o && (!n || (o.lastSynced || 0) > (n.lastSynced || 0))) out[k] = o;
+    }
+    return out;
+}
+
 // Merge freshly read profiles into what is shown: per profile and provider keep the
 // newest measurement, so a slow (older) read never jumps the tiles back.
 function mergeNewerProfiles(current, incoming) {
@@ -4002,6 +4046,21 @@ function mergeNewerProfiles(current, incoming) {
         out[pid] = merged;
     }
     return out;
+}
+
+function cs2UpdateEnc(config, sub, mutator, attempts = 5) {
+    return cs2ReadEnc(config, sub).then(({ obj, etag }) => {
+        const next = mutator(Object.assign({}, obj)) || obj;
+        return cs2WriteEnc(config, sub, next, etag).then(res => {
+            if (res && res.conflict && attempts > 1) return cs2UpdateEnc(config, sub, mutator, attempts - 1);
+            return res;
+        });
+    });
+}
+
+// Plain overschrijf (volledige inhoud bekend) — voor archive.
+function cs2PutEnc(config, sub, obj) {
+    return cs2WriteEnc(config, sub, obj, null).then(() => true);
 }
 
 // Lees de hele status-collectie -> {pid: statusObj}.
@@ -4024,6 +4083,18 @@ function cs2ReadArchive(config, pid) {
         logs: Array.isArray(obj.logs) ? obj.logs : [],
         threads: Array.isArray(obj.threads) ? obj.threads : []
     }));
+}
+
+// Bouw de slim legacy-blob-mutator (zonder logs/threads) voor niet-geüpgradede clients.
+function cs2LegacyBlobMutator(profileId, profileLabel, syncStatus) {
+    return (doc) => {
+        if (!doc.profiles) doc.profiles = {};
+        doc.profiles[profileId] = { label: profileLabel, syncStatus: syncStatus || {}, lastSeen: Date.now() };
+        doc.syncStatus = syncStatus || {};
+        doc.refreshRequested = false;
+        doc.refreshRequestedAt = null;
+        return doc;
+    };
 }
 
 /* Lees de volledige (gesplitste of legacy) cloud-staat → genormaliseerd doc.
@@ -4496,8 +4567,15 @@ function persistDashboardConfig() {
         }
 
         // Legacy (npoint): enkel-blob RMW.
-        updateNpointDocument(config, (cloudDoc) => {
+        const relay = syncRelay(config);
+        relay.read(config.binId).then(existing => {
+            let cloudDoc = {};
+            if (existing && existing.data) {
+                try { cloudDoc = JSON.parse(CryptoSync.decrypt(existing.data, config.pairingKey)); } catch (e) {}
+            }
             cloudDoc.dashboardConfig = dashCfg;
+            const enc = CryptoSync.encrypt(JSON.stringify(cloudDoc), config.pairingKey);
+            return relay.write(config.binId, { data: enc });
         }).then(done).catch(fail);
     });
 }
@@ -4721,17 +4799,6 @@ function chatgptWeeklyTime(sync, now) {
     return parseDateResetTime(sync && sync.resetWeekly, now, 7 * 24 * 60 * 60 * 1000);
 }
 
-function codexMonthlyTime(sync, now) {
-    const windowMs = 31 * 24 * 60 * 60 * 1000;
-    const resetAt = sync.resetMonthlyAbsoluteTs;
-    if (!Number.isFinite(resetAt) || resetAt <= 0) return parseDateResetTime(sync.resetMonthly, now, windowMs);
-    const diffMs = Math.max(0, resetAt - now);
-    return {
-        timePct: Math.min(100, (diffMs / windowMs) * 100),
-        timerText: diffMs === 0 ? "Resetting…" : formatWeeklyTimeMs(diffMs)
-    };
-}
-
 // Datum-gebaseerde reset ("1 jul 2026 23:24") → timePct t.o.v. windowMs (week of maand).
 function parseDateResetTime(resetStr, now, windowMs) {
     let timePct = 0, timerText = (resetStr || "").replace(/^(?:resets?|herstelt)\s*/i, "").trim() || "—";
@@ -4792,7 +4859,7 @@ function computeProviderPace(provider, sync, now, monthlySync) {
             sections.push({ title: "Weekly Limit (Pace)", capPct: sync.pctRemainingWeekly, timePct: wk.timePct, resetLabel: `in <span class="font-mono">${escapeHtmlSafe(wk.timerText)}</span>` });
         }
         if (monthlySync && monthlySync.pctRemainingMonthly !== undefined && monthlySync.pctRemainingMonthly !== null) {
-            const mo = codexMonthlyTime(monthlySync, now);
+            const mo = parseDateResetTime(monthlySync.resetMonthly, now, 31 * 24 * 60 * 60 * 1000);
             sections.push({ title: "Monthly Limit (Pace)", capPct: monthlySync.pctRemainingMonthly, timePct: mo.timePct, resetLabel: `<span class="font-mono">${escapeHtmlSafe(mo.timerText)}</span>` });
         }
     } else if (provider === "gemini") {
@@ -5634,9 +5701,16 @@ function deleteCloudProfile(profileId) {
         }
 
         // Legacy (npoint): enkel-blob RMW.
-        updateNpointDocument(config, (cloudDoc) => {
-            if (cloudDoc.profiles) delete cloudDoc.profiles[profileId];
-        }).then(afterRemove).catch(() => {
+        const relay = syncRelay(config);
+        relay.read(config.binId).then(data => {
+            if (!data || !data.data) return;
+            let cloudDoc = {};
+            try { cloudDoc = JSON.parse(CryptoSync.decrypt(data.data, config.pairingKey)); } catch (e) {}
+            if (!cloudDoc.profiles) cloudDoc.profiles = {};
+            delete cloudDoc.profiles[profileId];
+            const encrypted = CryptoSync.encrypt(JSON.stringify(cloudDoc), config.pairingKey);
+            return relay.write(config.binId, { data: encrypted }).then(afterRemove);
+        }).catch(() => {
             showToast(`<i class="fa-solid fa-circle-exclamation"></i> Could not remove profile — sync error.`);
         });
     });
@@ -5878,9 +5952,14 @@ function requestRemoteRefresh() {
     }
 
     // Legacy (npoint): enkel-blob read-modify-write.
-    updateNpointDocument(syncClient, (doc) => {
-        doc.refreshRequested = true;
-        doc.refreshRequestedAt = Date.now();
+    syncRelay(syncClient).read(syncClient.binId)
+    .then(data => {
+        if (!data || !data.data) throw new Error("Geen gecodeerde data gevonden.");
+        const decryptedData = JSON.parse(CryptoSync.decrypt(data.data, syncClient.pairingKey));
+        decryptedData.refreshRequested = true;
+        decryptedData.refreshRequestedAt = Date.now();
+        const encryptedStr = CryptoSync.encrypt(JSON.stringify(decryptedData), syncClient.pairingKey);
+        return syncRelay(syncClient).write(syncClient.binId, { data: encryptedStr });
     })
     .then(proceed)
     .catch(failed);
@@ -6162,7 +6241,7 @@ function pushUserDataToCloud() {
         if (cs2IsFirebase(config)) {
             const writes = [
                 cs2UpdateEnc(config, `status/${profileId}`, (s) => {
-                    s.label = profileLabel; s.syncStatus = cs2NewerSyncStatus(s.syncStatus, syncStatus); s.lastSeen = Date.now();
+                    s.label = profileLabel; s.syncStatus = syncStatus; s.lastSeen = Date.now();
                     s.pcOnline = true; delete s.lastError; return s;
                 }),
                 cs2PutEnc(config, `archive/${profileId}`, {
@@ -6182,8 +6261,27 @@ function pushUserDataToCloud() {
         }
 
         // ---- Legacy (npoint): enkel-blob read-modify-write ----
-        updateNpointProfile(config, profileId, profileLabel, syncStatus, {
-            logs: state.userLogs, threads: state.userThreads, settings: state.userSettings
+        const relay = syncRelay(config);
+        relay.read(config.binId).then(existing => {
+            let cloudDoc = {};
+            if (existing && existing.data) {
+                try {
+                    cloudDoc = JSON.parse(CryptoSync.decrypt(existing.data, config.pairingKey));
+                } catch (e) {
+                    logSync(`[Cloud Sync App] Waarschuwing: bestaande data onleesbaar (${e.message}). Nieuw document.`);
+                }
+            }
+            if (!cloudDoc.profiles) cloudDoc.profiles = {};
+            cloudDoc.profiles[profileId] = { label: profileLabel, syncStatus: syncStatus, lastSeen: Date.now() };
+            cloudDoc.logs               = state.userLogs     || [];
+            cloudDoc.threads            = state.userThreads  || [];
+            cloudDoc.settings           = state.userSettings || {};
+            cloudDoc.syncStatus         = syncStatus;
+            cloudDoc.refreshRequested   = false;
+            cloudDoc.refreshRequestedAt = null;
+            // cloudDoc.dashboardConfig blijft bewust ongemoeid (gedeelde config).
+            const encryptedStr = CryptoSync.encrypt(JSON.stringify(cloudDoc), config.pairingKey);
+            return relay.write(config.binId, { data: encryptedStr });
         })
         .then(() => {
             logSync(`[Cloud Sync App] Successfully uploaded (profile: ${profileLabel}).`);
