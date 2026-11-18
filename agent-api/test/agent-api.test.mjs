@@ -641,11 +641,12 @@ test("history config paths resolve beside config like cache paths", t => {
 
 // Central ingestion: real HTTP and a real worker/database, with no Firebase reads.
 const PC_TOKEN = "synthetic-ingestion-token";
+const OTHER_PC_TOKEN = "another-pc-token";
 const tokenHash = token => createHash("sha256").update(token).digest("hex");
 async function innameFixture(t, overrides = {}, historyFile, serverOptions = {}) {
     const f = historyFixture(t, overrides);
     const innameFile = path.join(f.dir, "inname.json");
-    fs.writeFileSync(innameFile, JSON.stringify({ pcs: { "test-pc": tokenHash(PC_TOKEN) } }));
+    fs.writeFileSync(innameFile, JSON.stringify({ pcs: { "test-pc": tokenHash(PC_TOKEN), "other-pc": tokenHash(OTHER_PC_TOKEN) } }));
     const store = f.makeStore(historyFile);
     const server = createServer({ config: f.cfg, token: TOKEN, store, innameFile, ...serverOptions });
     const port = await listen(server);
@@ -666,17 +667,17 @@ async function withDatabase(file, fn) {
 }
 const plainRows = rows => rows.map(row => ({ ...row }));
 
-test("central schema: tables, columns, indexes and version 2 exist before ingestion", async t => {
+test("central schema: tables, columns, indexes and version 3 exist before ingestion", async t => {
     const f = historyFixture(t), store = f.makeStore(); f.cleanup();
     await store.verloop(); // Barrier: initialization has finished in the worker.
     await withDatabase(f.historyFile, db => {
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(r => r.name).sort();
         assert.deepEqual(tables, ["berichten", "codex", "inname_log", "klussen", "metingen"]);
-        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 2);
+        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 3);
         const expected = {
             berichten: "id pc tijd tijd_eind bron sessie_id titel project model input output cache_lees cache_schrijf_5m cache_schrijf_1u koud subagent prijs ontvangen_op",
             codex: "id pc tijd account sessie_id werkmap model input cached_input output reasoning usd vijf_uur_pct week_pct ontvangen_op",
-            klussen: "rij vingerafdruk pc id klusmap account model start eind week_voor week_na vijf_uur_voor vijf_uur_na input output usd pr exitcode gelukt status ontvangen_op",
+            klussen: "rij vingerafdruk pc id klusmap account model start eind week_voor week_na vijf_uur_voor vijf_uur_na input output usd pr exitcode gelukt status ontvangen_op effort",
             inname_log: "rij pc tabel tijd ontvangen nieuw positie"
         };
         for (const [table, names] of Object.entries(expected)) {
@@ -776,6 +777,28 @@ test("jobs: snapshots share an id, fingerprint ignores pc, unknown fields and ob
         assert.notEqual(rows[0].vingerafdruk, rows[1].vingerafdruk);
         const fields = ["id", "klusmap", "account", "model", "start", "eind", "week_voor", "week_na", "vijf_uur_voor", "vijf_uur_na", "input", "output", "usd", "pr", "exitcode", "gelukt", "status"];
         assert.equal(rows[0].vingerafdruk, tokenHash(JSON.stringify(fields.map(key => lopend[key] ?? null))));
+    });
+});
+
+test("Codex deletions are scoped to the authenticated PC and audit only deleted rows", async t => {
+    const f = await innameFixture(t);
+    assert.equal((await f.post({ tabel: "codex", rijen: [{ id: "own" }] })).status, 200);
+    assert.equal((await f.post({ tabel: "codex", rijen: [{ id: "foreign" }] }, OTHER_PC_TOKEN)).status, 200);
+    const body = { tabel: "codex_verwijderd", pc: "other-pc", positie: 3,
+        rijen: [{ id: "own" }, { id: "foreign", pc: "other-pc" }, { id: "missing" }] };
+    assert.equal((await f.post(body, TOKEN)).status, 401);
+    const response = await f.post(body);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, tabel: body.tabel, ontvangen: 3, nieuw: 1, positie: 3,
+        backup: new Date().toISOString().slice(0, 10) });
+    assert.equal((await (await f.post(body)).json()).nieuw, 0);
+    await withDatabase(f.historyFile, db => {
+        assert.deepEqual(plainRows(db.prepare("SELECT id, pc FROM codex").all()), [{ id: "foreign", pc: "other-pc" }]);
+        const log = db.prepare("SELECT pc, ontvangen, nieuw, positie FROM inname_log WHERE tabel = ? ORDER BY rij").all(body.tabel);
+        assert.deepEqual(plainRows(log), [
+            { pc: "test-pc", ontvangen: 3, nieuw: 1, positie: 3 },
+            { pc: "test-pc", ontvangen: 3, nieuw: 0, positie: 3 }
+        ]);
     });
 });
 
@@ -959,8 +982,33 @@ test("migration: old metingen database is extended without changing existing row
     assert.equal(rows[0].week_pct, 45);
     assert.equal(rows[0].account, "old");
     await withDatabase(f.historyFile, db => {
-        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 2);
+        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 3);
         assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n, 5);
+    });
+});
+
+test("migration: version 2 jobs retain their fingerprint and expose null effort", async t => {
+    const f = historyFixture(t);
+    const first = f.makeStore();
+    const legacy = { id: "legacy-job", status: "klaar" };
+    const send = (store, row) => store.inname({ tabel: "klussen", pc: "test-pc", rijen: [row] });
+    assert.equal((await send(first, legacy)).nieuw, 1);
+    await first.close();
+    await withDatabase(f.historyFile, db => db.exec("ALTER TABLE klussen DROP COLUMN effort; PRAGMA user_version = 2"));
+
+    const store = f.makeStore(); f.cleanup();
+    assert.equal((await store.klussen()).klussen[0].effort, null);
+    assert.equal((await send(store, { ...legacy, effort: "high" })).nieuw, 1);
+    assert.equal((await send(store, legacy)).nieuw, 0);
+    assert.equal((await send(store, { ...legacy, effort: null })).nieuw, 0);
+    assert.equal((await send(store, { ...legacy, effort: "high" })).nieuw, 0);
+    const { klussen } = await store.klussen();
+    assert.deepEqual(klussen.map(({ id, effort }) => [id, effort]), [[legacy.id, "high"]]);
+    await withDatabase(f.historyFile, db => {
+        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 3);
+        const column = db.prepare("PRAGMA table_info(klussen)").all().find(row => row.name === "effort");
+        assert.equal(column.type, "TEXT");
+        assert.equal(db.prepare("SELECT count(*) AS n FROM klussen").get().n, 2);
     });
 });
 
@@ -1160,7 +1208,7 @@ test("HTTP verbruik: groep uur and sessie add hourly and per-session figures, ad
 test("HTTP klussen: newest snapshot per id, complete fields, start order and inclusive timezone filter", async t => {
     const f = await innameFixture(t);
     const job = { id: "job", klusmap: "C:\\werk\\klus", account: "account1", model: "sol", start: "2026-11-10T10:00:00Z", week_voor: 1, vijf_uur_voor: 2, status: "lopend" };
-    const done = { ...job, eind: "2026-11-10T11:00:00Z", week_na: 3, vijf_uur_na: 4, input: 100, output: 10, usd: 1.25, pr: "https://example.invalid/pr/1", exitcode: 0, gelukt: true, status: "klaar" };
+    const done = { ...job, eind: "2026-11-10T11:00:00Z", week_na: 3, vijf_uur_na: 4, input: 100, output: 10, usd: 1.25, pr: "https://example.invalid/pr/1", exitcode: 0, gelukt: true, status: "klaar", effort: "high" };
     await f.post({ tabel: "klussen", rijen: [job,
         { id: "newest-start", start: "2026-11-11T12:00:00Z" }, done,
         { id: "offset", start: "2026-11-10T10:30:00+01:00" },
@@ -1171,6 +1219,7 @@ test("HTTP klussen: newest snapshot per id, complete fields, start order and inc
     assert.equal(response.status, 200);
     const result = await response.json();
     assert.deepEqual(result.klussen.map(row => row.id), ["newest-start", "job", "offset", "changed-start"]);
+    assert.equal(result.klussen[0].effort, null);
     assert.deepEqual(result.klussen[1], { ...done, pc: "test-pc", gelukt: 1 });
     const since = await (await f.get("/v1/klussen?sinds=2026-11-10T11:00:00%2B01:00")).json();
     assert.deepEqual(since.klussen.map(row => row.id), ["newest-start", "job"]);
