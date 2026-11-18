@@ -6,6 +6,7 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ## [Nog niet uitgebracht]
 
+- **Codex monthly reset times stay the same across time zones.** The dashboard uses the reset timestamp and can still read reset text from older extensions.
 - **Job usage is recorded per round.** `GET /v1/klussen` includes each recorded round’s account, session, reasoning effort, limit readings, weekly reset time and exit code. PCs retain rounds locally until the API confirms ingestion protocol 3.
 - **Ingestion protocol 2 confirms job reasoning effort.** A regular sync probes for support whenever jobs still have protocol 1 acknowledgements, then resubmits those jobs with effort after the upgrade.
 - **Codex limit history preserves resets.** The PC records changed limits from counter-free messages with their original timestamps and zero tokens. A zero-token correction from backup requires rollout evidence of an unchanged cumulative count. After a late correction, the API checks whether the next Codex reading needs a new history entry. Verified deletions remain recorded per PC to prevent reingestion.
