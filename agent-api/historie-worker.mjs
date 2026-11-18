@@ -131,15 +131,27 @@ try {
     const deleteCodex = db.prepare("DELETE FROM codex WHERE id = ? AND pc = ?");
     const recordDeletion = db.prepare("INSERT OR IGNORE INTO codex_verwijderd (pc, id, tijd) VALUES (?, ?, ?)");
     const wasDeleted = db.prepare("SELECT 1 FROM codex_verwijderd WHERE pc = ? AND id = ?");
-    const fillCodexPrice = db.prepare("UPDATE codex SET usd = ? WHERE id = ? AND pc = ? AND model IS ? AND usd IS NULL");
+    const codexPriceMatch = db.prepare(`SELECT usd, usd IS ? AS zelfde_prijs,
+        input IS ? AND cached_input IS ? AND output IS ? AS zelfde_tokens
+        FROM codex WHERE id = ? AND pc = ? AND model IS ?`);
+    const fillCodexPrice = db.prepare("UPDATE codex SET usd = ? WHERE id = ? AND pc = ? AND usd IS NULL");
     const correctLimitRow = db.prepare(`UPDATE codex SET input = 0, cached_input = 0, output = 0, reasoning = 0, usd = 0
         WHERE id = ? AND pc = ? AND model IS ? AND tijd IS ? AND account IS ? AND sessie_id IS ?
             AND werkmap IS ? AND vijf_uur_pct IS ? AND week_pct IS ?`);
     const audit = db.prepare("INSERT OR IGNORE INTO inname_log (pc, tabel, tijd, ontvangen, nieuw, positie) VALUES (?, ?, ?, ?, ?, ?)");
     const previousCodex = db.prepare("SELECT vijf_uur_pct, week_pct FROM metingen WHERE account = ? AND bron = 'codex' AND laatst_gezien < ? ORDER BY laatst_gezien DESC LIMIT 1");
+    const nextCodex = db.prepare(`SELECT tijd, vijf_uur_pct, week_pct FROM codex
+        WHERE account IS ? AND tijd > ? AND (vijf_uur_pct IS NOT NULL OR week_pct IS NOT NULL)
+        ORDER BY tijd, rowid LIMIT 1`);
     const codexMeasurement = db.prepare(`INSERT OR IGNORE INTO metingen
         (gelezen_op, account, dienst, laatst_gezien, vijf_uur_pct, week_pct, bron)
         VALUES (?, ?, 'chatgpt', ?, ?, ?, 'codex')`);
+    function saveCodexMeasurement(receivedAt, account, time, five, week) {
+        const previous = previousCodex.get(account, time);
+        if (!previous || previous.vijf_uur_pct !== five || previous.week_pct !== week) {
+            codexMeasurement.run(receivedAt, account, time, five, week);
+        }
+    }
     const insert = db.prepare(`
         INSERT OR IGNORE INTO metingen (
             gelezen_op, account, dienst, laatst_gezien, vijf_uur_pct,
@@ -161,9 +173,9 @@ try {
             } else if (message.type === "inname") {
                 const { tabel, pc, positie = null, rijen, protocol } = message;
                 const fields = tabel === "codex_verwijderd" ? ["id"] : columns[tabel];
-                const limitCorrection = tabel === "codex" && (protocol === 2 || protocol === 3);
+                const supportsLimitCorrection = tabel === "codex" && protocol >= 2;
                 if (rijen.some(row => fields.some(key => row[key] !== null && typeof row[key] === "object")
-                    || (limitCorrection && row.limietcorrectie === true
+                    || (supportsLimitCorrection && row.limietcorrectie === true
                         && ((row.week_pct == null && row.vijf_uur_pct == null)
                             || [row.input, row.cached_input, row.output, row.reasoning, row.usd].some(value => value !== 0))))) {
                     parentPort.postMessage({ id: message.id, result: { ongeldig: true } });
@@ -172,6 +184,7 @@ try {
                 const receivedAt = new Date().toISOString();
                 const rows = tabel === "codex" ? [...rijen].sort((a, b) => String(a.tijd ?? "").localeCompare(String(b.tijd ?? ""))) : rijen;
                 let nieuw = 0;
+                const prijs_bevestigd = new Set(), prijs_tokenverschil = new Set();
                 db.exec("BEGIN");
                 try {
                     for (const row of rows) {
@@ -190,22 +203,34 @@ try {
                         }
                         const changes = Number(ingest[tabel].run(...args).changes);
                         nieuw += changes;
+                        if (tabel !== "codex") continue;
                         // Explicit limit repairs preserve the measurement and correct the old token count.
+                        const limitCorrection = supportsLimitCorrection && row.limietcorrectie === true;
                         let corrected = 0;
-                        if (tabel === "codex" && !changes) {
-                            if (limitCorrection && row.limietcorrectie === true) {
+                        if (limitCorrection) {
+                            if (!changes) {
                                 const identity = [row.model, row.tijd, row.account, row.sessie_id,
                                     row.werkmap, row.vijf_uur_pct, row.week_pct].map(sqlValue);
                                 corrected = Number(correctLimitRow.run(row.id, pc, ...identity).changes);
-                            } else if (row.usd != null) {
-                                fillCodexPrice.run(sqlValue(row.usd), row.id, pc, sqlValue(row.model));
+                            }
+                        } else if (row.usd != null) {
+                            const usd = sqlValue(row.usd);
+                            if (changes) {
+                                prijs_bevestigd.add(row.id);
+                            } else {
+                                const tokens = [row.input, row.cached_input, row.output].map(sqlValue);
+                                const match = codexPriceMatch.get(usd, ...tokens, row.id, pc, sqlValue(row.model));
+                                if (match && !match.zelfde_tokens) prijs_tokenverschil.add(row.id);
+                                if (match?.zelfde_tokens && (match.zelfde_prijs || (match.usd === null
+                                    && fillCodexPrice.run(usd, row.id, pc).changes))) prijs_bevestigd.add(row.id);
                             }
                         }
-                        if (tabel === "codex" && (changes || corrected) && (row.week_pct != null || row.vijf_uur_pct != null)) {
+                        if ((changes || corrected) && (row.week_pct != null || row.vijf_uur_pct != null)) {
                             const [account, time, five, week] = [row.account, row.tijd, row.vijf_uur_pct, row.week_pct].map(sqlValue);
-                            const previous = previousCodex.get(account, time);
-                            if (!previous || previous.vijf_uur_pct !== five || previous.week_pct !== week) {
-                                codexMeasurement.run(receivedAt, account, time, five, week);
+                            saveCodexMeasurement(receivedAt, account, time, five, week);
+                            if (limitCorrection) {
+                                const next = nextCodex.get(account, time);
+                                if (next) saveCodexMeasurement(receivedAt, account, next.tijd, next.vijf_uur_pct, next.week_pct);
                             }
                         }
                     }
@@ -213,7 +238,9 @@ try {
                     db.exec("COMMIT");
                 } catch (error) { db.exec("ROLLBACK"); throw error; }
                 dailyBackup();
-                parentPort.postMessage({ id: message.id, result: { nieuw, backup } });
+                parentPort.postMessage({ id: message.id, result: {
+                    nieuw, backup, prijs_bevestigd: [...prijs_bevestigd], prijs_tokenverschil: [...prijs_tokenverschil]
+                } });
             } else if (message.type === "verloop") {
                 const { account = null, sinds = null, max = 500, bron = null } = message;
                 const where = [], args = [];
@@ -237,8 +264,11 @@ try {
                 const hour = uurstart === null ? "strftime('%Y-%m-%dT%H:00:00Z', tijd)"
                     : "((CAST(strftime('%s', tijd) AS INTEGER) - CAST(strftime('%s', ?) AS INTEGER) + 360000000) / 3600 - 100000)";
                 const extras = [
-                    ...(extra ? ["ROUND(COALESCE(SUM(CASE WHEN context > 150000 THEN usd ELSE 0 END), 0), 4) AS groot_usd",
-                        "ROUND(COALESCE(SUM(CASE WHEN subagent THEN usd ELSE 0 END), 0), 4) AS subagent_usd"] : []),
+                    ...(extra ? [["groot_usd", "context > 150000"], ["subagent_usd", "subagent"]].flatMap(([name, filter]) => {
+                        const known = `ROUND(COALESCE(SUM(usd) FILTER (WHERE ${filter}), 0), 4)`;
+                        return [`CASE WHEN COUNT(*) FILTER (WHERE (${filter}) AND usd IS NULL) = 0 THEN ${known} END AS ${name}`,
+                            `${known} AS ${name}_bekend`];
+                    }) : []),
                     ...(fields.includes("sessie") ? ["MAX(titel) AS titel", "MAX(project) AS project",
                         "MIN(tijd) AS eerste", "MAX(tijd) AS laatste"] : [])
                 ];

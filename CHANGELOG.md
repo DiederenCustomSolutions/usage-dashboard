@@ -7,12 +7,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 ## [Nog niet uitgebracht]
 
 - **Job usage is recorded per round.** `GET /v1/klussen` includes each recorded round’s account, session, reasoning effort, limit readings, weekly reset time and exit code. PCs retain rounds locally until the API confirms ingestion protocol 3.
-- **Ingestion protocol 2 confirms job reasoning effort.** The PC hashes the acknowledged fields, so jobs sent to an older server are resubmitted with effort after the upgrade.
-- **Codex deduplication preserves limit resets.** The PC keeps limit changes as zero-token rows and can recover missing changes from a local backup. The API persists verified deletions per PC to prevent reingestion.
+- **Ingestion protocol 2 confirms job reasoning effort.** A regular sync probes for support whenever jobs still have protocol 1 acknowledgements, then resubmits those jobs with effort after the upgrade.
+- **Codex limit history preserves resets.** The PC records changed limits from counter-free messages with their original timestamps and zero tokens. A zero-token correction from backup requires rollout evidence of an unchanged cumulative count. After a late correction, the API checks whether the next Codex reading needs a new history entry. Verified deletions remain recorded per PC to prevent reingestion.
 - **Codex totals account for standalone turns.** A cumulative reading subtracts the standalone tokens already booked since the previous total. New rows use numbers above both the confirmed position and the highest number issued.
 - **`/v1/verbruik` counts Codex output once.** Reasoning tokens are already part of `output`; they were added a second time.
-- **Usage totals expose incomplete prices.** `usd` is `null` when any row has a missing price. `usd_bekend` reports the known subtotal alongside `regels_zonder_prijs`.
-- **Repriced Codex rows are queued for delivery.** The API fills a missing `usd` only for the matching PC, ID and model.
+- **Usage totals expose incomplete prices.** `usd`, `groot_usd` and `subagent_usd` are each `null` when a price is missing in their group. The corresponding `_bekend` fields report the known subtotals.
+- **Ingestion protocol 4 confirms Codex prices by row.** The API checks the PC, ID, model and pricing token counts before filling a missing price and reports token mismatches. The PC retains unconfirmed prices and can replay previously sent prices once with `--herlever-prijzen`.
 - **Day filter uses the index** (`tijd >= van AND tijd < day after tot`, new index `codex_tijd`).
 - **SQLite waits 5 s on a lock** instead of failing the inname at once.
 - **QR codes are made locally.** "Add profile" and "Mobile sync" no longer send the pairing link (with key) to an external QR service; `lib/qrcode.min.js` (qrcode-generator 1.4.4, MIT) draws an SVG.
