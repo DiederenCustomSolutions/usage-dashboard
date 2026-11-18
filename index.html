@@ -19,7 +19,7 @@
     <!-- Chart.js for Analytics (bundled locally — CDN blocked by MV3 CSP) -->
     <script src="lib/chart.min.js"></script>
     <script src="lib/qrcode.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=0.41.0">
+    <link rel="stylesheet" href="style.css?v=0.42.0">
 </head>
 <body>
     <!-- Animated Ambient Background Blobs -->
@@ -275,8 +275,9 @@
                                     </svg>
                                     <div class="progress-value">
                                         <span class="pct" id="pct-claude">100%</span>
-                                        <span class="lbl">Left</span>
+                                        <span class="lbl">Used</span>
                                     </div>
+                                    <div class="week-slot" id="week-slot-claude"></div>
                                 </div>
                             </div>
 
@@ -377,8 +378,9 @@
                                     </svg>
                                     <div class="progress-value">
                                         <span class="pct" id="pct-chatgpt">100%</span>
-                                        <span class="lbl">Left</span>
+                                        <span class="lbl">Used</span>
                                     </div>
+                                    <div class="week-slot" id="week-slot-chatgpt"></div>
                                 </div>
                             </div>
 
@@ -506,7 +508,7 @@
                                     </svg>
                                     <div class="progress-value">
                                         <span class="pct" id="pct-gemini">100%</span>
-                                        <span class="lbl">Left</span>
+                                        <span class="lbl">Used</span>
                                     </div>
                                 </div>
                             </div>
@@ -582,7 +584,7 @@
                                     </svg>
                                     <div class="progress-value">
                                         <span class="pct" id="pct-zai">100%</span>
-                                        <span class="lbl">Left</span>
+                                        <span class="lbl">Used</span>
                                     </div>
                                 </div>
                             </div>
@@ -1170,6 +1172,6 @@
     </div>
 
     <!-- Script Entry -->
-    <script src="app.js?v=0.41.0"></script>
+    <script src="app.js?v=0.42.0"></script>
 </body>
 </html>
