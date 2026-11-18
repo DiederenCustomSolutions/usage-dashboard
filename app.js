@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.43.1";
+const APP_VERSION = "0.43.2";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5495,7 +5495,8 @@ function usageReportWeek(report, log) {
         const reportDay = reportDays.get(date);
         let models = entries(reportDay);
         let fromLog = false;
-        if ((!models.length || reportDay?.stale) && logDays.has(date)) {
+        // The Codex log is exact per model and matches the hourly view; OpenAI's report can be partial or frozen.
+        if (logDays.has(date)) {
             const logged = entries(logDays.get(date));
             if (logged.length) {
                 models = logged;
@@ -5539,7 +5540,7 @@ function usageRowsFromProfiles() {
                 ...(usagePlannerAccounts.get(profile.label) || { who: profile.label }),
                 segments: daily ? usageModelTotals(last ? [last] : []) : totals,
                 period: daily ? (last ? usageDateFormat.format(Date.parse(last.date)) : "last day") : "7 days",
-                week, totals, hasLog, hours: log?.hours, hoursAt: log?.checkedAt, units: gpt?.units || "",
+                week, totals, hasLog, averaged: hasLog, hours: log?.hours, hoursAt: log?.checkedAt, units: gpt?.units || "",
                 // OpenAI's report can stop updating (16-11-2026: frozen for days); say so instead of looking idle.
                 stale: last && checkedAt - Date.parse(last.date) - 86400000 > 24 * 3600000
                     ? "No model data after " + usageDateFormat.format(Date.parse(last.date)) : ""
@@ -5678,9 +5679,17 @@ function renderUsageDetails(panel, item) {
     hourly.className = "um-hour-detail";
     hourly.id = panel.id + "-hours";
     const buttons = new Map();
+    const title = document.createElement("strong");
+    const shares = document.createElement("div");
     const showDate = date => {
         buttons.forEach((button, key) => button.setAttribute("aria-pressed", String(key === date)));
         renderUsageHours(hourly, item.hours, date, item.hoursAt);
+        // The share list follows the chosen day; without a day it shows the week.
+        const day = item.week.find(d => d.date === date);
+        const entries = day ? usageModelTotals([day], true) : item.totals;
+        title.textContent = day ? usageDateFormat.format(Date.parse(day.date)) + " share" : item.averaged ? "Average daily share" : "7-day totals";
+        const percent = value => usageNumberFormat.format(value) + "%";
+        shares.replaceChildren(entries.length ? usageValueList(entries, day || item.averaged ? percent : format) : "No usage");
     };
     const peak = item.hasLog ? 0 : Math.max(0, ...item.week.map(day => day.total));
     item.week.forEach(day => {
@@ -5726,11 +5735,7 @@ function renderUsageDetails(panel, item) {
     panel.addEventListener("pointerleave", restoreTip);
     panel.addEventListener("pointerover", showTip);
     panel.addEventListener("click", showTip);
-    panel.append(chart, hourly, tip);
-    const title = document.createElement("strong");
-    title.textContent = item.hasLog ? "Average daily share" : "7-day totals";
-    const totalFormat = item.hasLog ? value => usageNumberFormat.format(value) + "%" : format;
-    panel.append(title, item.totals.length ? usageValueList(item.totals, totalFormat) : " · No usage");
+    panel.append(chart, hourly, tip, title, shares);
 }
 
 function toggleUsageDetails(rows, button, panel, item) {

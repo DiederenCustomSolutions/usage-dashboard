@@ -267,7 +267,7 @@ async function main() {
                 panel.querySelectorAll('button.um-day-bar')[6].getAttribute('aria-pressed') === 'true' &&
                 panel.querySelector('.um-hour-detail').textContent === 'No hourly data' &&
                 !button.textContent.includes('No hourly data') &&
-                panel.querySelector('.um-values').textContent === 'Sol 63%Luna 61%' &&
+                panel.textContent.includes('22 Oct shareNo usage') &&
                 button.querySelector('.um-tot').textContent === '21 Oct';
         })()`);
         await cdp.evaluate(`

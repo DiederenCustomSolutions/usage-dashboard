@@ -4,6 +4,11 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.43.2] — 2026-11-18
+
+- Usage by model: a day uses the Codex log when it has data, so Astra shows as in the hourly view.
+- The share list follows the chosen day; closing the day shows the week again.
+
 ## [0.43.1] — 2026-11-18
 
 - New app icons: full logo for phone and PWA, round (maskable) for Android, simple ring for tab and extension.
