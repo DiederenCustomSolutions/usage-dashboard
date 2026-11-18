@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.37.0";
+const APP_VERSION = "0.38.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -3617,17 +3617,21 @@ function chatgptUsageInPageFetch() {
             // failure leaves the measurement valid.
             const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
             const today = Date.now();
-            return extra
-                .then(() => getJson("/backend-api/wham/usage/daily-token-usage-breakdown?start_date=" + utcDay(today - 6 * 86400000) + "&end_date=" + utcDay(today) + "&group_by=day", headers))
-                .then((report) => {
-                    const days = ((report && report.data) || []).map((d) => {
-                        const models = {};
-                        (d.models || []).forEach((m) => { if (m && m.model && typeof m.credits === "number" && m.credits > 0) models[m.model] = Math.round(m.credits * 100) / 100; });
-                        return { date: d.date, models };
-                    }).filter(d => typeof d.date === "string");
-                    data.modelUsage = { days, units: (report && report.units) || "", checkedAt: Date.now() };
-                }, () => {})
-                .then(() => ({ ok: true, data, monthly }));
+            const reportUrl = "/backend-api/wham/usage/daily-token-usage-breakdown?start_date=" + utcDay(today - 6 * 86400000) + "&end_date=" + utcDay(today) + "&group_by=day";
+            const breakdown = getJson(reportUrl, headers).then(report => {
+                const days = ((report && report.data) || []).map(d => {
+                    const totals = Object.create(null);
+                    (d.models || []).forEach(m => {
+                        if (m && m.model && Number.isFinite(m.credits) && m.credits > 0) {
+                            totals[m.model] = (totals[m.model] || 0) + m.credits;
+                        }
+                    });
+                    const models = Object.fromEntries(Object.entries(totals).map(([name, value]) => [name, Math.round(value * 100) / 100]));
+                    return { date: d.date, models };
+                }).filter(d => typeof d.date === "string");
+                data.modelUsage = { days, units: (report && report.units) || "", checkedAt: today };
+            }).catch(() => {}); // Optional report; the limits remain usable if it is unavailable.
+            return Promise.all([extra, breakdown]).then(() => ({ ok: true, data, monthly }));
         })
         .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }
@@ -3732,11 +3736,14 @@ let lastOpenRefreshAt = 0;
 let openRefreshWaitingForData = true;           // PWA: the first refresh waits for the first cloud read (baseline)
 
 function refreshAll(fromButton) {
-    if (isSyncClient()) {
+    const client = isSyncClient();
+    if (client) {
         // Telefoon/website: eerst direct de cloud-state ophalen zodat de UI meteen update,
         // daarna parallel de PC vragen om opnieuw te scrapen voor verse data.
-        if (fromButton) loadCloudUserData(true);
-        requestRemoteRefresh();
+        const metaRead = fromButton && cs2IsFirebase(client) && client.binId && client.pairingKey
+            ? cs2ReadEnc(client, "meta") : undefined;
+        if (fromButton) loadCloudUserData(true, metaRead);
+        requestRemoteRefresh(metaRead);
     } else {
         triggerSyncNow("claude");
         setTimeout(() => triggerSyncNow("chatgpt"), 1000); // Stagger to prevent browser throttling
@@ -4049,8 +4056,8 @@ function mergeNewerProfiles(current, incoming) {
     return out;
 }
 
-function cs2UpdateEnc(config, sub, mutator, attempts = 5) {
-    return cs2ReadEnc(config, sub).then(({ obj, etag }) => {
+function cs2UpdateEnc(config, sub, mutator, attempts = 5, read = cs2ReadEnc(config, sub)) {
+    return read.then(({ obj, etag }) => {
         const next = mutator(Object.assign({}, obj)) || obj;
         return cs2WriteEnc(config, sub, next, etag).then(res => {
             if (res && res.conflict && attempts > 1) return cs2UpdateEnc(config, sub, mutator, attempts - 1);
@@ -4094,6 +4101,7 @@ function cs2LegacyBlobMutator(profileId, profileLabel, syncStatus) {
         doc.syncStatus = syncStatus || {};
         doc.refreshRequested = false;
         doc.refreshRequestedAt = null;
+        // doc.dashboardConfig blijft staan (gedeeld); logs/threads bewust weggelaten.
         return doc;
     };
 }
@@ -4101,7 +4109,7 @@ function cs2LegacyBlobMutator(profileId, profileLabel, syncStatus) {
 /* Lees de volledige (gesplitste of legacy) cloud-staat → genormaliseerd doc.
    Geeft {profiles, dashboardConfig, refreshRequested, refreshRequestedAt,
    refreshClaimedBy, refreshClaimedAt, _schema}. logs/threads NIET (lui via archive). */
-function cs2ReadState(config) {
+function cs2ReadState(config, metaRead) {
     if (!cs2IsFirebase(config)) {
         // npoint: enkel-blob.
         return syncRelay(config).read(config.binId).then(data => {
@@ -4110,7 +4118,7 @@ function cs2ReadState(config) {
         });
     }
     // Firebase: meta + status-collectie parallel.
-    return Promise.all([cs2ReadEnc(config, "meta"), cs2ReadStatusAll(config)]).then(([metaRes, statusProfiles]) => {
+    return Promise.all([metaRead || cs2ReadEnc(config, "meta"), cs2ReadStatusAll(config)]).then(([metaRes, statusProfiles]) => {
         const meta = metaRes.obj || {};
         const hasV2 = meta.schema === CS2_SCHEMA || Object.keys(statusProfiles).length > 0;
         if (hasV2) {
@@ -5191,7 +5199,15 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openRese
 // Rendering never fetches or measures; it follows the existing renders and clock.
 let usageByModelData = null;
 const usageModelState = { period: "7d" };
-const usageModelColours = new Set(["opus", "sonnet", "haiku", "fable", "sol", "astra", "luna", "acc1", "acc2", "acc3", "main", "sub", "other"]);
+let expandedUsageRow = null;
+const usageModelColours = new Set(["astra", "sol", "terra", "luna"]);
+const usagePlannerAccounts = new Map([
+    ["Rob", { who: "GPT Rob", account: "account1" }],
+    ["Kevin", { who: "GPT KB PRO", account: "account2" }],
+    ["Kevin – LXDG-DCS", { who: "GPT Kevin", account: "account3" }]
+]);
+const usageDateFormat = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+const usageNumberFormat = new Intl.NumberFormat("en-GB", { maximumFractionDigits: 2 });
 
 function validateUsageByModel(data) {
     return !!data && Number.isFinite(Date.parse(data.generated)) && Array.isArray(data.SESSIES) && data.SESSIES.length <= 100 &&
@@ -5229,13 +5245,39 @@ async function initUsageByModel() {
 
 // "gpt-6.1-sol" → { label: "Sol 6.1", colour: "sol" }; unknown names stay visible in grey.
 function usageModelLabel(model) {
-    const m = /^gpt-([\d.]+)-([a-z]+)$/i.exec(model || "");
-    if (!m) return { label: model || "Other", colour: "other" };
-    const name = m[2].toLowerCase();
-    return { label: name.charAt(0).toUpperCase() + name.slice(1) + " " + m[1], colour: usageModelColours.has(name) ? name : "other" };
+    if (model === "codex-auto-review") return { label: "Auto review", colour: "other" };
+    const match = /^gpt-(\d+(?:\.\d+)*)(?:-([a-z]+)(?:-([a-z0-9]+(?:-[a-z0-9]+)*))?)?$/i.exec(model || "");
+    if (match) {
+        const [, version, family, variant] = match;
+        if (!family) return { label: "GPT " + version, colour: "other" };
+        const colour = family.toLowerCase();
+        if (usageModelColours.has(colour)) {
+            const name = colour[0].toUpperCase() + colour.slice(1);
+            return { label: name + " " + version + (variant ? " " + variant.replace(/-/g, " ") : ""), colour };
+        }
+    }
+    return { label: model || "Other", colour: "other" };
 }
 
-const usageSurfaceColours = { "Claude Code": "opus", "Chats": "haiku", "Cowork": "sonnet" };
+const usageSurfaceColours = new Map([["Claude Code", "opus"], ["Chats", "haiku"], ["Cowork", "sonnet"]]);
+
+function usageReportWeek(report) {
+    // Anchor the window to the saved report so reopening an old snapshot keeps its dates.
+    const dates = new Map(report.days.filter(d => d && /^\d{4}-\d{2}-\d{2}$/.test(d.date)).map(d => [d.date, d.models]));
+    const end = report.checkedAt || Date.parse([...dates.keys()].sort().pop());
+    if (!Number.isFinite(end)) return [];
+    return Array.from({ length: 7 }, (_, index) => {
+        const date = new Date(end - (6 - index) * 86400000).toISOString().slice(0, 10);
+        const models = Object.entries(dates.get(date) || {}).filter(([, value]) => Number.isFinite(value) && value > 0);
+        return { date, models, total: models.reduce((sum, [, value]) => sum + value, 0) };
+    });
+}
+
+function usageModelTotals(days) {
+    const sums = new Map();
+    days.forEach(day => day.models.forEach(([model, value]) => sums.set(model, (sums.get(model) || 0) + value)));
+    return [...sums].sort((a, b) => b[1] - a[1]).map(([model, value]) => ({ ...usageModelLabel(model), value }));
+}
 
 function usageRowsFromProfiles() {
     const rows = [];
@@ -5244,27 +5286,104 @@ function usageRowsFromProfiles() {
     profiles.forEach(profile => {
         const sync = profile.syncStatus || {};
         const gpt = sync.chatgpt && sync.chatgpt.modelUsage;
-        if (gpt && Array.isArray(gpt.days) && gpt.days.length) {
-            // The report lags about a day, so "Last day" is the latest day that has usage.
-            const lastDate = gpt.days.filter(d => Object.keys(d.models || {}).length).map(d => d.date).sort().pop();
-            const days = usageModelState.period === "day" ? gpt.days.filter(d => d.date === lastDate) : gpt.days;
-            const sums = {};
-            days.forEach(d => Object.entries(d.models || {}).forEach(([model, value]) => { sums[model] = (sums[model] || 0) + value; }));
-            const segments = Object.entries(sums).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
-                .map(([model, value]) => ({ ...usageModelLabel(model), value }));
-            rows.push({ provider: "gpt", who: profile.label, segments, period: usageModelState.period === "day" ? (lastDate ? new Date(lastDate + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "last day") : "7 days" });
+        if (gpt && Array.isArray(gpt.days) && (gpt.days.length || gpt.checkedAt)) {
+            const week = usageReportWeek(gpt);
+            const last = week.filter(d => d.total > 0).pop();
+            const totals = usageModelTotals(week);
+            const daily = usageModelState.period === "day";
+            rows.push({
+                key: tileKey(profile.id, "gpt"), provider: "gpt",
+                ...(usagePlannerAccounts.get(profile.label) || { who: profile.label }),
+                segments: daily ? usageModelTotals(last ? [last] : []) : totals,
+                period: daily ? (last ? usageDateFormat.format(Date.parse(last.date)) : "last day") : "7 days",
+                week, totals, units: gpt.units || ""
+            });
             measuredAt = Math.max(measuredAt, gpt.checkedAt || 0);
         }
         const claude = sync.claude && sync.claude.usageBreakdown;
         if (claude && Array.isArray(claude.rows)) {
-            const segments = claude.rows.filter(r => r.pct > 0)
-                .map(r => ({ label: r.name, colour: usageSurfaceColours[r.name] || "other", value: r.pct }));
-            const extra = (sync.claude.scopedWeekly || []).map(l => `${l.name} limit ${Math.round(l.pctUsed)}% used`);
-            rows.push({ provider: "claude", who: profile.label, segments, period: "this week", extra });
+            const surfaces = claude.rows.filter(r => r && Number.isFinite(r.pct))
+                .map(r => ({ label: r.name, colour: usageSurfaceColours.get(r.name) || "other", value: r.pct }));
+            const limits = (sync.claude.scopedWeekly || []).filter(l => l && Number.isFinite(l.pctUsed));
+            rows.push({ key: tileKey(profile.id, "claude"), provider: "claude", who: "Claude " + profile.label,
+                segments: surfaces.filter(s => s.value > 0), period: "this week", surfaces, limits });
             measuredAt = Math.max(measuredAt, claude.checkedAt || 0);
         }
     });
     return { rows, measuredAt };
+}
+
+function usageValueList(entries, format) {
+    const list = document.createElement("ul");
+    list.className = "um-values";
+    entries.forEach(({ label, colour, value }) => {
+        const li = document.createElement("li");
+        const swatch = document.createElement("i");
+        swatch.style.background = `var(--um-${colour})`;
+        const amount = document.createElement("strong");
+        amount.textContent = format(value);
+        li.append(swatch, label, amount);
+        list.append(li);
+    });
+    return list;
+}
+
+function renderUsageDetails(panel, item) {
+    if (item.provider === "claude") {
+        panel.append(usageValueList(item.surfaces, value => usageNumberFormat.format(value) + "%"));
+        item.limits.forEach(limit => {
+            const label = document.createElement("label");
+            label.className = "um-limit";
+            const meter = document.createElement("progress");
+            meter.max = 100;
+            meter.value = limit.pctUsed;
+            label.append(limit.name + " weekly limit · " + usageNumberFormat.format(limit.pctUsed) + "% used", meter);
+            panel.append(label);
+        });
+        return;
+    }
+    const unit = item.units === "percent" ? "%" : item.units && " " + item.units;
+    const format = value => usageNumberFormat.format(value) + unit;
+    const chart = document.createElement("div");
+    chart.className = "um-week";
+    const peak = Math.max(0, ...item.week.map(day => day.total));
+    item.week.forEach(day => {
+        const column = document.createElement("div");
+        const bar = document.createElement("div");
+        bar.className = "um-day-bar";
+        const values = day.models.map(([model, value]) => {
+            const { label, colour } = usageModelLabel(model);
+            const segment = document.createElement("span");
+            segment.style.background = `var(--um-${colour})`;
+            segment.style.height = value / peak * 100 + "%";
+            bar.append(segment);
+            return label + " " + format(value);
+        });
+        const date = usageDateFormat.format(Date.parse(day.date));
+        bar.title = date + " · " + (values.join(", ") || "No usage");
+        bar.setAttribute("role", "img");
+        bar.setAttribute("aria-label", bar.title);
+        column.append(bar, date);
+        chart.append(column);
+    });
+    panel.append(chart);
+    const title = document.createElement("strong");
+    title.textContent = "7-day totals";
+    panel.append(title, item.totals.length ? usageValueList(item.totals, format) : " · No usage");
+}
+
+function toggleUsageDetails(rows, button, panel, item) {
+    const previous = rows.querySelector('button[aria-expanded="true"]');
+    if (previous) {
+        previous.setAttribute("aria-expanded", "false");
+        previous.nextElementSibling.hidden = true;
+    }
+    expandedUsageRow = previous === button ? null : item.key;
+    if (expandedUsageRow !== null) {
+        if (!panel.hasChildNodes()) renderUsageDetails(panel, item);
+        panel.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+    }
 }
 
 function renderUsageByModel() {
@@ -5276,26 +5395,37 @@ function renderUsageByModel() {
     // Nothing measured for the shown profiles and no local cache data: the tile stays hidden.
     tile.style.display = rows.length || usageByModelData ? "" : "none";
     rowsEl.innerHTML = "";
-    rows.forEach(item => {
+    rows.forEach((item, index) => {
         const total = item.segments.reduce((sum, s) => sum + s.value, 0);
-        const row = document.createElement("div");
+        const entry = document.createElement("div");
+        const row = document.createElement("button");
+        const panel = document.createElement("div");
+        panel.id = "um-detail-" + index;
+        panel.className = "um-detail";
+        panel.hidden = expandedUsageRow !== item.key;
+        row.type = "button";
         row.className = "um-row";
-        row.innerHTML = `<div class="um-who"><span class="um-dot um-${item.provider}"></span><span></span></div><div class="um-stack"></div><div class="um-tot"></div><div class="um-legend"></div>`;
-        row.querySelector(".um-who span:last-child").textContent = item.who;
-        row.querySelector(".um-who").title = (item.provider === "gpt" ? "ChatGPT" : "Claude") + " · " + item.who;
+        if (item.provider === "gpt") row.title = "ChatGPT · " + item.who;
+        row.setAttribute("aria-expanded", String(!panel.hidden));
+        row.setAttribute("aria-controls", panel.id);
+        row.addEventListener("click", () => toggleUsageDetails(rowsEl, row, panel, item));
+        if (!panel.hidden) renderUsageDetails(panel, item);
+        row.innerHTML = `<span class="um-who"><span class="um-dot um-${item.provider}"></span><span class="um-name"></span></span><span class="um-stack"></span><span class="um-tot"></span><span class="um-legend"></span>`;
+        const name = row.querySelector(".um-name");
+        name.textContent = item.who;
+        if (item.account) name.appendChild(Object.assign(document.createElement("small"), { textContent: item.account }));
         row.querySelector(".um-tot").textContent = item.period;
         const stack = row.querySelector(".um-stack"), legend = row.querySelector(".um-legend");
         if (!total) stack.appendChild(Object.assign(document.createElement("span"), { className: "um-note", textContent: "No usage" }));
         item.segments.forEach(({ label, colour, value }) => {
             const percent = value / total * 100;
-            const segment = document.createElement("div");
+            const segment = document.createElement("span");
             segment.style.width = percent + "%";
             segment.style.background = `var(--um-${colour})`;
             if (percent >= 16) segment.textContent = label + " " + Math.round(percent) + "%";
             else if (percent >= 7) segment.textContent = Math.round(percent) + "%";
             segment.title = `${label} · ${Math.round(percent)}%`;
             segment.setAttribute("aria-label", segment.title);
-            segment.tabIndex = 0;
             stack.appendChild(segment);
             if (percent < 16) {
                 const entry = document.createElement("span"), swatch = document.createElement("i");
@@ -5304,8 +5434,11 @@ function renderUsageByModel() {
                 legend.appendChild(entry);
             }
         });
-        (item.extra || []).forEach(text => legend.appendChild(Object.assign(document.createElement("span"), { textContent: text })));
-        rowsEl.appendChild(row);
+        (item.limits || []).forEach(limit => legend.appendChild(Object.assign(document.createElement("span"), {
+            textContent: limit.name + " limit " + Math.round(limit.pctUsed) + "% used"
+        })));
+        entry.append(row, panel);
+        rowsEl.append(entry);
     });
     cache.hidden = !usageByModelData;
     if (usageByModelData) {
@@ -5805,6 +5938,7 @@ function processNormalizedCloudDoc(doc, syncClient, isManual) {
             state.userLogs    = doc.logs;
             state.userThreads = doc.threads || [];
         }
+        if (!Array.isArray(doc.logs)) refreshPwaArchives(updateUI);
         lastSyncTime = Date.now();
         retryCount   = 0;
         updateUI();
@@ -5813,8 +5947,6 @@ function processNormalizedCloudDoc(doc, syncClient, isManual) {
         if (isManual) showToast(`<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Data synced!`);
         // First data on this page: now the "opened" refresh can compare against it.
         if (openRefreshWaitingForData) { openRefreshWaitingForData = false; refreshOnOpen(); }
-        // V2: laad logs/threads lui na (pace-overlays + Analyze-tab) en hertekenen.
-        if (!Array.isArray(doc.logs)) refreshPwaArchives(() => updateUI());
     } catch (err) {
         console.error("[Cloud Sync] processNormalizedCloudDoc error:", err);
         stopSpinners();
@@ -5836,16 +5968,16 @@ function _aggregateArchives(ids) {
 }
 function refreshPwaArchives(cb) {
     const cfg = isSyncClient();
-    if (!cfg || !cs2IsFirebase(cfg)) { if (cb) cb(); return; }
+    if (!cfg || !cs2IsFirebase(cfg)) { return; }
     const profiles = state.cloudProfiles || {};
     const ids = Object.keys(profiles);
-    if (ids.length === 0) { state.userLogs = []; state.userThreads = []; if (cb) cb(); return; }
+    if (ids.length === 0) { state.userLogs = []; state.userThreads = []; return; }
     // Alleen profielen herladen waarvan de lastSeen veranderd is (of nog niet gecached).
     const need = ids.filter(pid => {
         const c = _archiveCache[pid];
         return !c || c.lastSeen !== (profiles[pid].lastSeen || 0);
     });
-    if (need.length === 0) { _aggregateArchives(ids); if (cb) cb(); return; }
+    if (need.length === 0) { _aggregateArchives(ids); return; }
     Promise.all(need.map(pid =>
         cs2ReadArchive(cfg, pid).then(a => {
             _archiveCache[pid] = { lastSeen: profiles[pid].lastSeen || 0, logs: a.logs, threads: a.threads };
@@ -5854,7 +5986,7 @@ function refreshPwaArchives(cb) {
 }
 
 // 2. Fetch and Render cloud sync data on Mobile clients
-function loadCloudUserData(isManual = false) {
+function loadCloudUserData(isManual = false, metaRead) {
     const syncClient = isSyncClient();
     if (!syncClient || !syncClient.binId || !syncClient.pairingKey) return;
     
@@ -5878,7 +6010,7 @@ function loadCloudUserData(isManual = false) {
         if (icon) icon.classList.add("fa-spin");
     }
     
-    cs2ReadState(syncClient)
+    cs2ReadState(syncClient, metaRead)
         .then(doc => { processNormalizedCloudDoc(doc, syncClient, isManual); })
         .catch(err => {
             console.error("[USAGE DASHBOARD] Cloud sync error:", err);
@@ -5908,7 +6040,7 @@ function triggerSyncRetry() {
 
 // Phone client: request PC to execute scraping remotely by writing trigger flag to Cloud Bin
 let remoteRefreshInFlight = false;
-function requestRemoteRefresh() {
+function requestRemoteRefresh(metaRead) {
     const syncClient = isSyncClient();
     if (!syncClient || !syncClient.binId || !syncClient.pairingKey) return;
 
@@ -5955,7 +6087,7 @@ function requestRemoteRefresh() {
             cs2UpdateEnc(syncClient, "meta", (m) => {
                 m.schema = CS2_SCHEMA; m.refreshRequested = true; m.refreshRequestedAt = Date.now();
                 m.refreshClaimedBy = null; m.refreshClaimedAt = null; return m;
-            })
+            }, 5, metaRead)
         ];
         if (CS2_WRITE_LEGACY) {
             writes.push(cs2UpdateEnc(syncClient, "data", (d) => { d.refreshRequested = true; d.refreshRequestedAt = Date.now(); return d; }));
@@ -6091,13 +6223,12 @@ function startFastPollingForRemoteSync(baseline) {
             if (doc.dashboardConfig) state.dashboardConfig = normalizeDashboardConfig(doc.dashboardConfig);
             if (Array.isArray(doc.logs)) { state.userLogs = doc.logs; state.userThreads = doc.threads || []; }
 
+            if (!Array.isArray(doc.logs)) refreshPwaArchives(updateUI);
             lastSyncTime = Date.now();
             updateUI();
             updateMobileSyncIndicator(true);
             setRefreshStatus("done");
             showToast(`<i class="fa-solid fa-circle-check" style="color: var(--accent-green);"></i> Data synced live from your PC!`);
-            // V2: laad logs/threads lui na (pace + Analyze).
-            if (!Array.isArray(doc.logs)) refreshPwaArchives(() => updateUI());
             return true;
         }
         return false;
@@ -6583,10 +6714,7 @@ function applyMobileSyncUI() {
                 
                 const btnRefresh = document.getElementById("btn-mobile-refresh");
                 if (btnRefresh) {
-                    btnRefresh.addEventListener("click", () => {
-                        loadCloudUserData(true);
-                        requestRemoteRefresh();
-                    });
+                    btnRefresh.addEventListener("click", () => refreshAll(true));
                 }
             } else if (box.id === "sync-devices-box") {
                 box.style.display = "";

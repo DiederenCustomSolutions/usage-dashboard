@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const repo = path.resolve(__dirname, '..');
 const workspace = path.resolve(repo, '..');
 const fixturePath = path.join(__dirname, 'fixtures', 'usage-by-model.fixture.json');
+const saveArtifacts = process.env.DASHBOARD_TEST_ARTIFACTS !== '0';
 const measurementPath = path.join(repo, 'usage-by-model.json');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function loadMeasurement() {
@@ -163,6 +164,7 @@ async function main() {
             report.checks.push(label);
         };
         async function screenshot(filename) {
+            if (!saveArtifacts) return;
             await cdp.evaluate("document.getElementById('usage-by-model').scrollIntoView({block:'center'})");
             await delay(300);
             const result=await cdp.call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
@@ -183,15 +185,15 @@ async function main() {
         // Model and surface usage come from measured profiles, separate from the cache file.
         await cdp.evaluate(`
             state.cloudProfiles = {
-                one: { label: 'One', syncStatus: {
+                one: { label: 'Rob', syncStatus: {
                     chatgpt: { lastSynced: Date.now(), pctRemaining5h: 50, modelUsage: {
-                        checkedAt: Date.now(), days: [
+                        units: 'percent', checkedAt: Date.parse('2026-10-22'), days: [
                             { date: '2026-10-20', models: { 'gpt-6-sol': 3 } },
                             { date: '2026-10-21', models: { 'gpt-6-luna': 1 } },
                             { date: '2026-10-22', models: {} }
                         ]
                     } },
-                    claude: { lastSynced: Date.now(), pctRemaining: 50, usageBreakdown: {
+                    claude: { lastSynced: Date.now(), pctRemaining: 50, scopedWeekly: [{name:'Fable',pctUsed:11}], usageBreakdown: {
                         checkedAt: Date.now(), rows: [{ name: 'Claude Code', pct: 75 }, { name: 'Chats', pct: 25 }]
                     } }
                 } }
@@ -203,7 +205,7 @@ async function main() {
         await check('Profile measurements render both providers',`(() => {
             const tile = document.getElementById('usage-by-model');
             const rows = [...tile.querySelectorAll('.um-row')];
-            return rows.length === 2 && rows.every(row => row.querySelector('.um-who').textContent === 'One') &&
+            return rows.length === 2 && rows[0].querySelector('.um-who').textContent === 'GPT Robaccount1' && rows[1].querySelector('.um-who').textContent === 'Claude Rob' &&
                 rows[0].textContent.includes('Sol 6 75%') && rows[1].textContent.includes('Claude Code 75%') &&
                 !tile.querySelector('.um-foot').hidden &&
                 tile.querySelector('.um-source').textContent === 'Share of usage per person';
@@ -246,8 +248,43 @@ async function main() {
         await cdp.evaluate("state.selectedProfileId='one'; applyBlockVisibility(); renderMultiProfileCards(); setTileArrangeMode(false)");
         await check('Single view restores tile and removes arrange controls',"document.querySelectorAll('#usage-by-model').length===1 && document.getElementById('usage-by-model').parentElement.id!=='multi-profile-grid' && document.querySelectorAll('.tile-move').length===0");
         assert.equal(usageRequests,initialRequests,'Period selection and arranging never fetch measurements');
-        await cdp.call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
-        await check('Mobile tile fits viewport',"(()=>{const rect=document.getElementById('usage-by-model').getBoundingClientRect();return rect.width<=390 && document.querySelector('.um-stack').getBoundingClientRect().width>0})()");
+        await cdp.call('Emulation.setDeviceMetricsOverride',{width:375,height:844,deviceScaleFactor:1,mobile:true});
+        await check('Mobile tile fits viewport',"(()=>{const rect=document.getElementById('usage-by-model').getBoundingClientRect();return rect.width<=375 && document.querySelector('.um-stack').getBoundingClientRect().width>0})()");
+        await cdp.evaluate("document.querySelector('.um-row').focus()");
+        async function press(key, code, virtualKey) {
+            for (const type of ['keyDown','keyUp']) await cdp.call('Input.dispatchKeyEvent', {
+                type, key, code, windowsVirtualKeyCode:virtualKey, text:type === 'keyDown' ? (key === 'Enter' ? '\r' : key === ' ' ? ' ' : undefined) : undefined
+            });
+        }
+        await press('Enter','Enter',13);
+        await check('Enter opens the seven-day breakdown',`(() => {
+            const button = document.querySelector('.um-row');
+            const panel = document.getElementById(button.getAttribute('aria-controls'));
+            return button.getAttribute('aria-expanded') === 'true' && !panel.hidden &&
+                panel.querySelectorAll('.um-day-bar').length === 7 &&
+                panel.querySelectorAll('.um-day-bar:empty').length === 5 &&
+                panel.querySelector('.um-values').textContent === 'Sol 63%Luna 61%' &&
+                button.querySelector('.um-tot').textContent === '21 Oct';
+        })()`);
+        for (const theme of ['light','dark']) {
+            await cdp.call('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:theme}]});
+            await check('Expanded tile fits 375px in '+theme,`(() => {
+                const tile = document.querySelector('#usage-by-model');
+                const right = tile.getBoundingClientRect().right;
+                return right <= 375 && tile.scrollWidth <= tile.clientWidth &&
+                    document.querySelector('.um-week').getBoundingClientRect().right <= right;
+            })()`);
+        }
+        await press(' ','Space',32);
+        await check('Space closes the focused row',"document.querySelector('.um-row').getAttribute('aria-expanded') === 'false' && document.querySelector('.um-detail').hidden");
+        await cdp.evaluate("document.querySelector('.um-row').click();document.querySelectorAll('.um-row')[1].click()");
+        await check('Claude detail shows shares and weekly limit',`(() => {
+            const panel = document.querySelector('.um-detail:not([hidden])');
+            return document.querySelectorAll('.um-row[aria-expanded="true"]').length === 1 &&
+                panel.querySelector('progress').value === 11 &&
+                panel.querySelector('.um-values').textContent === 'Claude Code75%Chats25%';
+        })()`);
+        await cdp.evaluate("document.querySelectorAll('.um-row')[1].click()");
         await screenshot('tegel-mobiel.png');
         await cdp.call('Emulation.setDeviceMetricsOverride',{width:1400,height:900,deviceScaleFactor:1,mobile:false});
 
@@ -276,15 +313,15 @@ async function main() {
         await check('Invalid schema hides the empty tile',emptyTile);
         assert.deepEqual(report.errors,[],'No uncaught browser errors');
         report.checks.push('No uncaught browser errors');
-        fs.writeFileSync(path.join(workspace,'test-dashboard.json'),JSON.stringify(report,null,2));
-        console.log('Headless Edge: '+report.checks.length+' checks passed; screenshots saved.');
+        if (saveArtifacts) fs.writeFileSync(path.join(workspace,'test-dashboard.json'),JSON.stringify(report,null,2));
+        console.log('Headless Edge: '+report.checks.length+' checks passed.');
     } catch (error) {
         report.errors.push(error.message);
         if (!cdp && fs.existsSync(edgeLogPath)) {
             const stderr = fs.readFileSync(edgeLogPath, 'utf8').trim();
-            if (stderr) report.edgeStderr = stderr;
+            if (stderr) { report.edgeStderr = stderr; if (!saveArtifacts) console.error(stderr); }
         }
-        fs.writeFileSync(path.join(workspace,'test-dashboard.json'),JSON.stringify(report,null,2));
+        if (saveArtifacts) fs.writeFileSync(path.join(workspace,'test-dashboard.json'),JSON.stringify(report,null,2));
         throw error;
     } finally {
         if (cdp && ws.readyState === WebSocket.OPEN) {

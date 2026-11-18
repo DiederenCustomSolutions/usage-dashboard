@@ -743,17 +743,21 @@ function chatgptUsageInPageFetch() {
             // failure leaves the measurement valid.
             const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
             const today = Date.now();
-            return extra
-                .then(() => getJson("/backend-api/wham/usage/daily-token-usage-breakdown?start_date=" + utcDay(today - 6 * 86400000) + "&end_date=" + utcDay(today) + "&group_by=day", headers))
-                .then((report) => {
-                    const days = ((report && report.data) || []).map((d) => {
-                        const models = {};
-                        (d.models || []).forEach((m) => { if (m && m.model && typeof m.credits === "number" && m.credits > 0) models[m.model] = Math.round(m.credits * 100) / 100; });
-                        return { date: d.date, models };
-                    }).filter(d => typeof d.date === "string");
-                    data.modelUsage = { days, units: (report && report.units) || "", checkedAt: Date.now() };
-                }, () => {})
-                .then(() => ({ ok: true, data, monthly }));
+            const reportUrl = "/backend-api/wham/usage/daily-token-usage-breakdown?start_date=" + utcDay(today - 6 * 86400000) + "&end_date=" + utcDay(today) + "&group_by=day";
+            const breakdown = getJson(reportUrl, headers).then(report => {
+                const days = ((report && report.data) || []).map(d => {
+                    const totals = Object.create(null);
+                    (d.models || []).forEach(m => {
+                        if (m && m.model && Number.isFinite(m.credits) && m.credits > 0) {
+                            totals[m.model] = (totals[m.model] || 0) + m.credits;
+                        }
+                    });
+                    const models = Object.fromEntries(Object.entries(totals).map(([name, value]) => [name, Math.round(value * 100) / 100]));
+                    return { date: d.date, models };
+                }).filter(d => typeof d.date === "string");
+                data.modelUsage = { days, units: (report && report.units) || "", checkedAt: today };
+            }).catch(() => {}); // Optional report; the limits remain usable if it is unavailable.
+            return Promise.all([extra, breakdown]).then(() => ({ ok: true, data, monthly }));
         })
         .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }
