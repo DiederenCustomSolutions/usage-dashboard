@@ -4,6 +4,11 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.42.1] — 2026-11-18
+
+- Week donut larger and further from the 5h ring.
+- Reset lines inverted: they grow with time passed.
+
 ## [0.42.0] — 2026-11-18
 
 - Tile ring now shows % used (5h); remaining stays in the bars below.

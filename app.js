@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.42.0";
+const APP_VERSION = "0.42.1";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -2553,7 +2553,8 @@ function setTimerRing(ringId, percent) {
     if (!ring) return;
     const p = Math.max(0, Math.min(100, Number(percent) || 0));
     ring.style.display = p > 0 ? "" : "none";
-    if (p > 0) setProgressRing(ringId, p);
+    // Inverted like the ring: the line grows with time passed since the reset.
+    if (p > 0) setProgressRing(ringId, 100 - p);
 }
 
 /* ==========================================================================
@@ -4929,15 +4930,15 @@ function weekDonutHTML(cls, sec) {
     if (!sec) return "";
     const used = 100 - Math.max(0, Math.min(100, Number(sec.capPct) || 0));
     const time = Math.max(0, Math.min(100, Number(sec.timePct) || 0));
-    const r = 19, c = 2 * Math.PI * r, rt = 26, ct = 2 * Math.PI * rt;
+    const r = 24, c = 2 * Math.PI * r, rt = 33, ct = 2 * Math.PI * rt;
     const timer = time > 0
-        ? `<circle class="progress-ring__timer" r="${rt}" cx="30" cy="30" style="stroke-dasharray:${ct} ${ct}; stroke-dashoffset:${ct - (time / 100) * ct};"/>`
+        ? `<circle class="progress-ring__timer" r="${rt}" cx="38" cy="38" style="stroke-dasharray:${ct} ${ct}; stroke-dashoffset:${ct - ((100 - time) / 100) * ct};"/>`
         : "";
     return `<div class="week-donut" title="Week: ${Math.round(used)}% used">
-        <svg class="progress-ring" width="60" height="60" viewBox="0 0 60 60">
+        <svg class="progress-ring" width="76" height="76" viewBox="0 0 76 76">
             ${timer}
-            <circle cx="30" cy="30" r="${r}" fill="#10142a" stroke="rgba(255,255,255,0.07)" stroke-width="6"/>
-            <circle class="progress-ring__circle ${cls}-stroke week-donut__arc" cx="30" cy="30" r="${r}" stroke-width="6" fill="none"
+            <circle cx="38" cy="38" r="${r}" fill="#10142a" stroke="rgba(255,255,255,0.07)" stroke-width="7"/>
+            <circle class="progress-ring__circle ${cls}-stroke week-donut__arc" cx="38" cy="38" r="${r}" stroke-width="7" fill="none"
                 style="stroke-dasharray:${c} ${c}; stroke-dashoffset:${c - (used / 100) * c};"/>
         </svg>
         <div class="week-donut__val"><span>${Math.round(used)}%</span><small>week</small></div>
@@ -4990,7 +4991,7 @@ function buildSnapshotCard(provider, profile) {
     const timeNum = ringSec ? Math.max(0, Math.min(100, Number(ringSec.timePct) || 0)) : 0;
     const rt = 69, circT = 2 * Math.PI * rt;
     const timerHTML = timeNum > 0
-        ? `<circle class="progress-ring__timer" r="${rt}" cx="65" cy="65" style="stroke-dasharray:${circT} ${circT}; stroke-dashoffset:${circT - (timeNum / 100) * circT};"/>`
+        ? `<circle class="progress-ring__timer" r="${rt}" cx="65" cy="65" style="stroke-dasharray:${circT} ${circT}; stroke-dashoffset:${circT - ((100 - timeNum) / 100) * circT};"/>`
         : "";
     const ringIs5h = !!ringSec && /^(5 Hour|Current Session)/.test(ringSec.title);
     const weekHTML = weekDonutHTML(meta.cls, paceSections.find(s => /^Weekly/.test(s.title) && s.capPct !== undefined && s.capPct !== null));
