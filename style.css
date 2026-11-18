@@ -3169,10 +3169,10 @@ a.psm-manage-btn { text-decoration: none; }
 /* Week donut: small ring bottom right of the 5h ring, with its own reset line. */
 .week-donut {
     position: absolute;
-    right: -36px;
-    bottom: -30px;
-    width: 60px;
-    height: 60px;
+    right: -54px;
+    bottom: -44px;
+    width: 76px;
+    height: 76px;
 }
 .week-donut .week-donut__arc { stroke-linecap: round; }
 .week-donut__val {
@@ -3184,5 +3184,5 @@ a.psm-manage-btn { text-decoration: none; }
     justify-content: center;
     line-height: 1;
 }
-.week-donut__val span { font-family: 'Outfit', sans-serif; font-size: 0.72rem; font-weight: 700; color: #fff; }
-.week-donut__val small { font-size: 0.5rem; color: var(--text-muted); margin-top: 1px; }
+.week-donut__val span { font-family: 'Outfit', sans-serif; font-size: 0.9rem; font-weight: 700; color: #fff; }
+.week-donut__val small { font-size: 0.6rem; color: var(--text-muted); margin-top: 1px; }.progress-visualization:has(.week-donut) { margin-bottom: 24px; }
