@@ -6,10 +6,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ## [Nog niet uitgebracht]
 
-- **Central usage tracks job reasoning effort and removes duplicate Codex rows reported by their source PC.**
+- **Ingestion protocol 2 confirms job reasoning effort.** The PC hashes the acknowledged fields, so jobs sent to an older server are resubmitted with effort after the upgrade.
+- **Codex deduplication preserves limit resets.** The PC keeps limit changes as zero-token rows and can recover missing changes from a local backup. The API persists verified deletions per PC to prevent reingestion.
+- **Codex totals account for standalone turns.** A cumulative reading subtracts the standalone tokens already booked since the previous total. New rows use numbers above both the confirmed position and the highest number issued.
 - **`/v1/verbruik` counts Codex output once.** Reasoning tokens are already part of `output`; they were added a second time.
-- **Unknown cost is no longer $0.** Each group has `regels_zonder_prijs`; `usd` is `null` when no row has a price.
-- **Re-sent Codex rows fill a missing price.** Only an empty `usd` is filled; nothing else is overwritten.
+- **Usage totals expose incomplete prices.** `usd` is `null` when any row has a missing price. `usd_bekend` reports the known subtotal alongside `regels_zonder_prijs`.
+- **Repriced Codex rows are queued for delivery.** The API fills a missing `usd` only for the matching PC, ID and model.
 - **Day filter uses the index** (`tijd >= van AND tijd < day after tot`, new index `codex_tijd`).
 - **SQLite waits 5 s on a lock** instead of failing the inname at once.
 - **QR codes are made locally.** "Add profile" and "Mobile sync" no longer send the pairing link (with key) to an external QR service; `lib/qrcode.min.js` (qrcode-generator 1.4.4, MIT) draws an SVG.
