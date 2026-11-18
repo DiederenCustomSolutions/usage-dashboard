@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.39.0";
+const APP_VERSION = "0.40.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5200,6 +5200,8 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openRese
 let usageByModelData = null;
 const usageModelState = { period: "7d" };
 let expandedUsageRow = null;
+// Undefined follows the newest day in the open panel. Null means the hour chart was closed.
+let selectedUsageDate;
 const usageModelColours = new Set(["astra", "sol", "terra", "luna"]);
 const usagePlannerAccounts = new Map([
     ["Rob", { who: "GPT Rob", account: "account1" }],
@@ -5322,7 +5324,7 @@ function usageRowsFromProfiles() {
                 ...(usagePlannerAccounts.get(profile.label) || { who: profile.label }),
                 segments: daily ? usageModelTotals(last ? [last] : []) : totals,
                 period: daily ? (last ? usageDateFormat.format(Date.parse(last.date)) : "last day") : "7 days",
-                week, totals, hasLog, units: gpt?.units || "",
+                week, totals, hasLog, hours: log?.hours, units: gpt?.units || "",
                 // OpenAI's report can stop updating (16-11-2026: frozen for days); say so instead of looking idle.
                 stale: last && checkedAt - Date.parse(last.date) - 86400000 > 24 * 3600000
                     ? "No model data after " + usageDateFormat.format(Date.parse(last.date)) : ""
@@ -5357,6 +5359,69 @@ function usageValueList(entries, format) {
     return list;
 }
 
+function usageHoursForDate(hours, date, timeZone) {
+    const buckets = Array.from({ length: 24 }, () => new Map());
+    if (!Array.isArray(hours) || !hours.length) return buckets;
+    const local = new Intl.DateTimeFormat("en-GB", {
+        timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23"
+    });
+    for (const hour of hours) {
+        const instant = Date.parse(hour?.t);
+        if (!Number.isFinite(instant)) continue;
+        const parts = Object.fromEntries(local.formatToParts(instant).map(p => [p.type, p.value]));
+        if (`${parts.year}-${parts.month}-${parts.day}` !== date) continue;
+        // The repeated clock hour in autumn shares a bar. The skipped spring hour stays empty.
+        const models = buckets[Number(parts.hour)];
+        for (const [model, value] of Object.entries(hour.models || {})) {
+            if (Number.isFinite(value) && value > 0) models.set(model, (models.get(model) || 0) + value);
+        }
+    }
+    return buckets;
+}
+
+function appendUsageSegments(bar, models, peak, format) {
+    const values = [];
+    for (const [model, value] of models) {
+        const { label, colour } = usageModelLabel(model);
+        const segment = document.createElement("span");
+        segment.style.background = `var(--um-${colour})`;
+        segment.style.height = value / peak * 100 + "%";
+        bar.append(segment);
+        values.push(label + " " + format(value));
+    }
+    return values.join(", ") || "No usage";
+}
+
+function usageTokens(value) {
+    return usageTokenFormat.format(value).toUpperCase() + " tok";
+}
+
+function renderUsageHours(chart, hours, date) {
+    chart.replaceChildren();
+    chart.hidden = !date;
+    if (!date) return;
+    const buckets = usageHoursForDate(hours, date);
+    const peak = Math.max(...buckets.map(models => [...models.values()].reduce((a, b) => a + b, 0)));
+    if (!peak) {
+        chart.textContent = "No hourly data";
+        return;
+    }
+    const grid = document.createElement("div");
+    grid.className = "um-hours";
+    buckets.forEach((models, hour) => {
+        const column = document.createElement("div");
+        const bar = document.createElement("div");
+        bar.className = "um-hour-bar";
+        bar.title = String(hour).padStart(2, "0") + ":00 · " + appendUsageSegments(bar, models, peak, usageTokens);
+        bar.setAttribute("role", "img");
+        bar.setAttribute("aria-label", bar.title);
+        column.append(bar);
+        if (hour % 6 === 0) column.append(String(hour));
+        grid.append(column);
+    });
+    chart.append(grid);
+}
+
 function renderUsageDetails(panel, item) {
     if (item.provider === "claude") {
         panel.append(usageValueList(item.surfaces, value => usageNumberFormat.format(value) + "%"));
@@ -5373,31 +5438,39 @@ function renderUsageDetails(panel, item) {
     }
     const unit = item.units === "percent" ? "%" : item.units && " " + item.units;
     const format = value => usageNumberFormat.format(value) + unit;
-    const tokens = value => usageTokenFormat.format(value) + " tok";
     const chart = document.createElement("div");
     chart.className = "um-week";
+    const hourly = document.createElement("div");
+    hourly.className = "um-hour-detail";
+    hourly.id = panel.id + "-hours";
+    const buttons = new Map();
+    const showDate = date => {
+        buttons.forEach((button, key) => button.setAttribute("aria-pressed", String(key === date)));
+        renderUsageHours(hourly, item.hours, date);
+    };
     const peak = item.hasLog ? 0 : Math.max(0, ...item.week.map(day => day.total));
     item.week.forEach(day => {
         const column = document.createElement("div");
-        const bar = document.createElement("div");
+        const bar = document.createElement("button");
+        bar.type = "button";
         bar.className = "um-day-bar";
-        const values = day.models.map(([model, value]) => {
-            const { label, colour } = usageModelLabel(model);
-            const segment = document.createElement("span");
-            segment.style.background = `var(--um-${colour})`;
-            segment.style.height = value / (item.hasLog ? day.total : peak) * 100 + "%";
-            bar.append(segment);
-            return label + " " + (day.fromLog ? tokens(value) : format(value));
-        });
+        const values = appendUsageSegments(bar, day.models, item.hasLog ? day.total : peak, day.fromLog ? usageTokens : format);
         const date = usageDateFormat.format(Date.parse(day.date));
-        bar.title = date + (day.fromLog ? " · Codex log" : "") + " · " + (values.join(", ") || "No usage");
-        bar.setAttribute("role", "img");
+        bar.title = date + (day.fromLog ? " · Codex log" : "") + " · " + values;
         bar.setAttribute("aria-label", bar.title);
+        bar.setAttribute("aria-controls", hourly.id);
+        buttons.set(day.date, bar);
+        bar.addEventListener("click", () => {
+            selectedUsageDate = bar.getAttribute("aria-pressed") === "true" ? null : day.date;
+            showDate(selectedUsageDate);
+        });
         column.append(bar, date);
-        if (day.fromLog) column.append(document.createElement("br"), tokens(day.total));
+        if (day.fromLog) column.append(document.createElement("br"), usageTokens(day.total));
         chart.append(column);
     });
-    panel.append(chart);
+    const date = selectedUsageDate === null || buttons.has(selectedUsageDate) ? selectedUsageDate : item.week.at(-1)?.date;
+    showDate(date);
+    panel.append(chart, hourly);
     const title = document.createElement("strong");
     title.textContent = item.hasLog ? "Average daily share" : "7-day totals";
     const totalFormat = item.hasLog ? value => usageNumberFormat.format(value) + "%" : format;
@@ -5412,7 +5485,9 @@ function toggleUsageDetails(rows, button, panel, item) {
     }
     expandedUsageRow = previous === button ? null : item.key;
     if (expandedUsageRow !== null) {
-        if (!panel.hasChildNodes()) renderUsageDetails(panel, item);
+        selectedUsageDate = undefined;
+        panel.replaceChildren();
+        renderUsageDetails(panel, item);
         panel.hidden = false;
         button.setAttribute("aria-expanded", "true");
     }
@@ -5452,6 +5527,7 @@ function renderUsageByModel() {
         item.segments.forEach(({ label, colour, value }) => {
             const percent = value / total * 100;
             const segment = document.createElement("span");
+            if (colour === "astra") segment.className = "um-astra";
             segment.style.width = percent + "%";
             segment.style.background = `var(--um-${colour})`;
             if (percent >= 16) segment.textContent = label + " " + Math.round(percent) + "%";

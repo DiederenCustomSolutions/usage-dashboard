@@ -117,9 +117,15 @@ async function checkCodexLogSync() {
     const checkedAt = Date.parse('2026-11-03T00:01:00Z');
     const report = {checkedAt, units: 'percent', days: []};
     const config = {account: 'fixture-account', token: 'fixture-token'};
-    const row = {dag: '2026-11-03', model: 'gpt-6.2-sol', account: config.account, output: 6, input: 200, reasoning: 2};
+    const row = {dag: '2026-11-03', uur: '2026-11-03T00:00:00Z', model: 'gpt-6.2-sol', account: config.account, output: 6, input: 200, reasoning: 2};
     const payload = {rijen: [row, {...row, output: 4}, {...row, account: 'unrelated', output: 400},
-        {...row, dag: '2026-10-28', output: 2}, {...row, dag: '2026-10-27', output: 100}]};
+        {...row, model: 'gpt-6.2-astra', output: 3},
+        {...row, dag: '2026-10-28', uur: '2026-10-28T05:00:00Z', output: 2},
+        {...row, dag: '2026-10-28', uur: '2026-10-28T18:00:00Z', output: 7},
+        {...row, dag: '2026-10-27', uur: '2026-10-27T23:00:00Z', output: 100},
+        {...row, dag: '2026-10-26', uur: '2026-10-26T23:00:00Z'},
+        {...row, dag: '2026-11-02', uur: '2026-11-02T09:00:00Z', output: 0},
+        {...row, model: 'negative', output: -4}, {...row, model: 'zero', output: 0}]};
     const saved = {lt_current_user: 'tester', lt_users: {tester: {}}};
     const local = {
         get(key, done) {
@@ -163,12 +169,17 @@ async function checkCodexLogSync() {
     const request = new URL(calls[0].url);
     assert.equal(request.origin + request.pathname, 'http://127.0.0.1:8787/v1/verbruik');
     assert.deepEqual(Object.fromEntries(request.searchParams), {
-        van: '2026-10-28', tot: '2026-11-03', groep: 'dag,account,model', bron: 'codex'
+        van: '2026-10-27', tot: '2026-11-03', groep: 'dag,uur,account,model', bron: 'codex'
     });
     assert.equal(calls[0].options.headers.Authorization, 'Bearer ' + config.token);
     const expected = {days: [
-        {date: '2026-10-28', models: {'gpt-6.2-sol': 2}},
-        {date: '2026-11-03', models: {'gpt-6.2-sol': 10}}
+        {date: '2026-10-28', models: {'gpt-6.2-sol': 9}},
+        {date: '2026-11-03', models: {'gpt-6.2-sol': 10, 'gpt-6.2-astra': 3}}
+    ], hours: [
+        {t: '2026-10-27T23:00:00Z', models: {'gpt-6.2-sol': 100}},
+        {t: '2026-10-28T05:00:00Z', models: {'gpt-6.2-sol': 2}},
+        {t: '2026-10-28T18:00:00Z', models: {'gpt-6.2-sol': 7}},
+        {t: '2026-11-03T00:00:00Z', models: {'gpt-6.2-sol': 10, 'gpt-6.2-astra': 3}}
     ], units: 'tokens', source: 'codex-log', checkedAt};
     assert.deepEqual(pushed.syncStatus.chatgpt.modelUsageLog, expected);
     assert.ok(!JSON.stringify(pushed).includes('fixture-'));
@@ -202,8 +213,12 @@ function checkCodexLogDashboard() {
     // Render the actual row and details so the source label, raw units and bar heights are checked together.
     function element() {
         const selectors = new Map();
-        return {children: [], style: {}, querySelectorAll: () => [], addEventListener() {}, setAttribute() {},
+        const attributes = new Map(), handlers = new Map();
+        return {children: [], style: {}, querySelectorAll: () => [],
+            addEventListener(name, handler) { handlers.set(name, handler); }, click() { handlers.get('click')(); },
+            setAttribute(name, value) { attributes.set(name, value); }, getAttribute(name) { return attributes.get(name); },
             append(...items) { this.children.push(...items); }, appendChild(item) { this.append(item); },
+            replaceChildren(...items) { this.children = items; this.textContent = ''; },
             querySelector(selector) {
                 if (!selectors.has(selector)) selectors.set(selector, element());
                 return selectors.get(selector);
@@ -228,7 +243,8 @@ function checkCodexLogDashboard() {
     const legend = row => row.querySelector('.um-legend').children.map(el => el.textContent);
     let [button, panel] = render();
     assert.deepEqual(legend(button), ['No model data after 15 Nov']);
-    assert.equal(panel.children[1].textContent, '7-day totals');
+    assert.equal(panel.children[1].textContent, 'No hourly data');
+    assert.equal(panel.children[2].textContent, '7-day totals');
     checks++;
 
     chatgpt.modelUsageLog = {checkedAt, units: 'tokens', source: 'codex-log', days: [
@@ -246,8 +262,64 @@ function checkCodexLogDashboard() {
     assert.equal(columns[3].children[0].children[0].style.height, '75%');
     assert.equal(columns[6].children.at(-1), '1.2M tok');
     assert.equal(columns[6].children[0].title, '18 Nov · Codex log · Astra 6.2 1.2M tok');
-    assert.equal(panel.children[1].textContent, 'Average daily share');
-    assert.equal(panel.children[2].children[0].children.at(-1).textContent, '62.5%');
+    assert.equal(panel.children[1].textContent, 'No hourly data'); // Older snapshot with days only.
+    assert.equal(panel.children[2].textContent, 'Average daily share');
+    assert.equal(panel.children[3].children[0].children.at(-1).textContent, '62.5%');
+    checks++;
+
+    const localHour = day => new Date(2026, 10, day, 14).toISOString();
+    chatgpt.modelUsageLog.hours = [
+        {t: localHour(17), models: {'gpt-6.1-sol': 3}},
+        {t: localHour(18), models: {'gpt-6.2-astra': 1200000, 'gpt-6.1-sol': 300000}}
+    ];
+    [button, panel] = render();
+    const dayButtons = panel.children[0].children.map(column => column.children[0]);
+    const hourly = panel.children[1];
+    assert.equal(dayButtons[6].getAttribute('aria-pressed'), 'true');
+    const bars = hourly.children[0].children.map(column => column.children[0]);
+    assert.equal(bars.length, 24);
+    assert.equal(bars[14].title, '14:00 · Astra 6.2 1.2M tok, Sol 6.1 300K tok');
+    assert.deepEqual(bars[14].children.map(span => span.style.height), ['80%', '20%']);
+    dayButtons[5].click();
+    assert.equal(dayButtons[6].getAttribute('aria-pressed'), 'false');
+    assert.equal(dayButtons[5].getAttribute('aria-pressed'), 'true');
+    assert.equal(hourly.children[0].children[14].children[0].title, '14:00 · Sol 6.1 3 tok');
+    dayButtons[5].click();
+    assert.equal(hourly.hidden, true);
+    assert.equal(hourly.children.length, 0);
+    button.nextElementSibling = panel;
+    const container = {querySelector: () => button.getAttribute('aria-expanded') === 'true' ? button : null};
+    ui.toggleUsageDetails(container, button, panel, item);
+    assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.equal(panel.hidden, true);
+    ui.toggleUsageDetails(container, button, panel, ui.usageRowsFromProfiles().rows[0]);
+    assert.equal(button.getAttribute('aria-expanded'), 'true');
+    assert.equal(panel.hidden, false);
+    assert.equal(panel.children[0].children[6].children[0].getAttribute('aria-pressed'), 'true');
+    checks++;
+
+    const hours = [
+        {t: '2026-10-24T21:00:00Z', models: {sol: 90}},
+        {t: '2026-10-24T22:00:00Z', models: {sol: 1}},
+        {t: '2026-10-25T00:00:00Z', models: {astra: 2}},
+        {t: '2026-10-25T01:00:00Z', models: {astra: 3, sol: 4}},
+        {t: '2026-10-25T22:00:00Z', models: {sol: 8}},
+        {t: '2026-10-25T23:00:00Z', models: {sol: 16}}
+    ];
+    const autumn = ui.usageHoursForDate(hours, '2026-10-25', 'Europe/Amsterdam');
+    assert.equal(autumn.length, 24);
+    assert.deepEqual(Object.fromEntries(autumn[0]), {sol: 1});
+    assert.deepEqual(Object.fromEntries(autumn[2]), {astra: 5, sol: 4});
+    assert.deepEqual(Object.fromEntries(autumn[23]), {sol: 8});
+    assert.equal(autumn.filter(bucket => bucket.size).length, 3);
+    const west = ui.usageHoursForDate(hours, '2026-10-24', 'America/New_York');
+    assert.deepEqual(Object.fromEntries(west[21]), {astra: 3, sol: 4});
+    const spring = ui.usageHoursForDate([
+        {t: '2026-03-29T00:00:00Z', models: {sol: 2}},
+        {t: '2026-03-29T01:00:00Z', models: {sol: 3}}
+    ], '2026-03-29', 'Europe/Amsterdam');
+    assert.equal(spring.length, 24);
+    assert.deepEqual([spring[1].get('sol'), spring[2].size, spring[3].get('sol')], [2, 0, 3]);
     checks++;
 
     vm.runInContext("usageModelState.period = 'day'", ui);
@@ -339,13 +411,6 @@ async function main() {
     assert.deepEqual(Array.from(rows[0].week, d => d.total), [0,0,0,0,2,1,0]); checks++;
     assert.deepEqual(Array.from(rows[0].totals, s => [s.label,s.value]), [['Sol 6',2],['Luna 6',1]]); checks++;
     assert.equal(rows[1].surfaces.length, 2); assert.equal(rows[1].limits[0].pctUsed, 3); checks++;
-    const panel = {hidden:true, hasChildNodes:()=>true};
-    const button = {nextElementSibling:panel, setAttribute(key,value){this[key]=value}};
-    const container = {querySelector:()=>button['aria-expanded']==='true' ? button : null};
-    context.toggleUsageDetails(container, button, panel, rows[0]);
-    assert.equal(button['aria-expanded'],'true'); assert.equal(panel.hidden,false); checks++;
-    context.toggleUsageDetails(container, button, panel, rows[0]);
-    assert.equal(button['aria-expanded'],'false'); assert.equal(panel.hidden,true); checks++;
     check('Last day uses the latest day with usage',"(()=>{usageModelState.period='day';const r=usageRowsFromProfiles();return r.rows[0].segments.length===1&&r.rows[0].segments[0].label==='Luna 6'})()");
     check('Frozen report is flagged',"(()=>{const g=sampleStatus.chatgpt.modelUsage;const old=g.checkedAt;g.checkedAt=Date.parse('2026-10-24T13:00:00Z');const s1=usageRowsFromProfiles().rows[0].stale;g.checkedAt=Date.parse('2026-10-22T20:00:00Z');const s2=usageRowsFromProfiles().rows[0].stale;g.checkedAt=old;return s1==='No model data after 21 Oct'&&s2===''})()");
     check('Selected profile filters rows',"(()=>{state.selectedProfileId='b';return usageRowsFromProfiles().rows.length===0})()");

@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.40.0] — 2026-11-18
+
+- Usage by model shows hourly Codex output in local time when you select a day, with green GPT shades and dividers between models.
+
+---
+
 ## [0.39.0] — 2026-11-18
 
 - Usage by model fills missing ChatGPT days from the measuring Chrome’s configured Codex log and labels those days with their output tokens.
