@@ -2395,7 +2395,7 @@ function renderDashboardProgress() {
 
     if (monthlySync && monthlySync.pctRemainingMonthly !== undefined && monthlySync.pctRemainingMonthly !== null) {
         const monthPct = Math.max(0, Math.min(100, monthlySync.pctRemainingMonthly));
-        const m = parseDateResetTime(monthlySync.resetMonthly, now, 31 * 24 * 60 * 60 * 1000);
+        const m = chatgptMonthlyTime(monthlySync, now);
         const monthTimerEl = document.getElementById("month-timer-chatgpt");
         if (monthTimerEl) monthTimerEl.innerText = m.timerText;
         if (secMonth) secMonth.style.display = "";
@@ -3586,6 +3586,7 @@ function chatgptUsageInPageFetch() {
                 monthly = {
                     pctRemainingMonthly: left(month),
                     pctRemaining: left(month),
+                    resetMonthlyAbsoluteTs: isNaN(tsMonth) ? undefined : tsMonth,
                     resetMonthly: isNaN(tsMonth) ? "" : "Reset " + day(tsMonth),
                     source: "api",
                     summary: `Via API: ${left(month)}% maandlimiet over.`
@@ -4799,6 +4800,18 @@ function chatgptWeeklyTime(sync, now) {
     return parseDateResetTime(sync && sync.resetWeekly, now, 7 * 24 * 60 * 60 * 1000);
 }
 
+function chatgptMonthlyTime(sync, now) {
+    const monthMs = 31 * 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(sync.resetMonthlyAbsoluteTs)) {
+        return parseDateResetTime(sync.resetMonthly, now, monthMs);
+    }
+    const diffMs = Math.max(0, sync.resetMonthlyAbsoluteTs - now);
+    return {
+        timePct: Math.min(100, (diffMs / monthMs) * 100),
+        timerText: diffMs === 0 ? "Resetting…" : formatWeeklyTimeMs(diffMs)
+    };
+}
+
 // Datum-gebaseerde reset ("1 jul 2026 23:24") → timePct t.o.v. windowMs (week of maand).
 function parseDateResetTime(resetStr, now, windowMs) {
     let timePct = 0, timerText = (resetStr || "").replace(/^(?:resets?|herstelt)\s*/i, "").trim() || "—";
@@ -4859,7 +4872,7 @@ function computeProviderPace(provider, sync, now, monthlySync) {
             sections.push({ title: "Weekly Limit (Pace)", capPct: sync.pctRemainingWeekly, timePct: wk.timePct, resetLabel: `in <span class="font-mono">${escapeHtmlSafe(wk.timerText)}</span>` });
         }
         if (monthlySync && monthlySync.pctRemainingMonthly !== undefined && monthlySync.pctRemainingMonthly !== null) {
-            const mo = parseDateResetTime(monthlySync.resetMonthly, now, 31 * 24 * 60 * 60 * 1000);
+            const mo = chatgptMonthlyTime(monthlySync, now);
             sections.push({ title: "Monthly Limit (Pace)", capPct: monthlySync.pctRemainingMonthly, timePct: mo.timePct, resetLabel: `<span class="font-mono">${escapeHtmlSafe(mo.timerText)}</span>` });
         }
     } else if (provider === "gemini") {

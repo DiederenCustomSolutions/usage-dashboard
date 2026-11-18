@@ -28,6 +28,64 @@ vm.runInContext(source.slice(usageStart,usageEnd)+source.slice(usageEnd,orderEnd
 const run = code=>vm.runInContext(code,context);
 let checks = 0;
 function check(labelText,code) {assert.equal(run(code),true,labelText);checks++;}
+
+async function checkMonthlyReset() {
+    const previousTZ = process.env.TZ;
+    const now = Date.parse('2026-10-25T00:00:00Z');
+    // The second 02:30 in Amsterdam, after the clock has gone back.
+    const resetAt = Date.parse('2026-10-25T01:30:00Z');
+    const monthlyWindow = {used_percent: 10, limit_window_seconds: 30 * 86400, reset_at: resetAt / 1000};
+    const resetContext = vm.createContext({
+        now,
+        fetch: async url => {
+            assert.ok(['/api/auth/session', '/backend-api/wham/usage'].includes(url));
+            return {ok: true, json: async () => url === '/api/auth/session'
+                ? {accessToken: 'fixture'}
+                : {rate_limit: {primary_window: monthlyWindow}}};
+        }
+    });
+    const loadFunction = (script, name) => {
+        const start = script.indexOf('function ' + name + '(');
+        assert.notEqual(start, -1, name);
+        vm.runInContext(script.slice(start, script.indexOf('\n}', start) + 2), resetContext);
+    };
+    for (const name of ['formatWeeklyTimeMs', 'chatgptMonthlyTime', 'parseDateResetTime', 'computeProviderPace', 'escapeHtmlSafe']) {
+        loadFunction(source, name);
+    }
+    try {
+        process.env.TZ = 'Europe/Amsterdam';
+        assert.equal(new Date(now).getTimezoneOffset(), -120);
+        assert.equal(new Date(resetAt).getTimezoneOffset(), -60);
+        for (const file of ['content.js', 'background.js', 'app.js']) {
+            loadFunction(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), 'chatgptUsageInPageFetch');
+            const result = await vm.runInContext('chatgptUsageInPageFetch()', resetContext);
+            assert.equal(result.ok, true, file);
+            assert.equal(result.monthly.resetMonthlyAbsoluteTs, resetAt, file);
+            assert.equal(result.monthly.resetMonthly, 'Reset 25 Oct 2026 02:30', file);
+            resetContext.monthly = JSON.parse(JSON.stringify({codex: result.monthly})).codex;
+            checks++;
+        }
+
+        for (const [zone, offset, legacyTimer] of [
+            ['Europe/Amsterdam', -60, '30m'],
+            ['America/New_York', 240, '6u 30m']
+        ]) {
+            process.env.TZ = zone;
+            assert.equal(new Date(resetAt).getTimezoneOffset(), offset);
+            const pace = vm.runInContext('computeProviderPace("chatgpt", {}, now, monthly)[0]', resetContext);
+            assert.equal(pace.resetLabel, '<span class="font-mono">1u 30m</span>', zone);
+            const remainingMs = (pace.timePct / 100) * (31 * 86400 * 1000);
+            assert.equal(now + Math.round(remainingMs), resetAt, zone);
+            const legacy = vm.runInContext('chatgptMonthlyTime({resetMonthly: monthly.resetMonthly}, now)', resetContext);
+            assert.equal(legacy.timerText, legacyTimer, zone);
+            checks++;
+        }
+    } finally {
+        if (previousTZ === undefined) delete process.env.TZ;
+        else process.env.TZ = previousTZ;
+    }
+}
+
 async function main() {
     context.sample=data;
     check('Populated measurement validates','sample.SESSIES.length > 0 && validateUsageByModel(sample)');
@@ -76,6 +134,7 @@ async function main() {
     context.fetch=async()=>({ok:true,json:async()=>{throw new SyntaxError('Malformed')}});
     await run('initUsageByModel()');
     check('Malformed JSON clears snapshot','usageByModelData===null');
+    await checkMonthlyReset();
     console.log('Usage state: '+checks+' offline checks passed.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1});
