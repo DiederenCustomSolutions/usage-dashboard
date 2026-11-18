@@ -19,7 +19,7 @@
     <!-- Chart.js for Analytics (bundled locally — CDN blocked by MV3 CSP) -->
     <script src="lib/chart.min.js"></script>
     <script src="lib/qrcode.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=0.40.3">
+    <link rel="stylesheet" href="style.css?v=0.41.0">
 </head>
 <body>
     <!-- Animated Ambient Background Blobs -->
@@ -134,7 +134,7 @@
                         <h1>Usage Dashboard</h1>
                         <span class="sub-logo">Subscription Usage Dashboard</span>
                     </div>
-                    <div class="header-sync-status" title="All automatic scrapers are currently active and connected via the extension.">
+                    <div class="header-sync-status sync-ok" title="Synced">
                         <span class="pulse-dot"></span>
                         <span>Live Syncing</span>
                     </div>
@@ -146,8 +146,6 @@
                     <button class="nav-tab active" data-tab="tab-dashboard">Dashboard</button>
                     <button class="nav-tab" data-tab="tab-analytics">Analyze</button>
                     <button class="nav-tab" data-tab="tab-settings">Settings</button>
-                    <button class="nav-tab placeholder-tab" id="btn-tab-reports">Reports</button>
-                    <button class="nav-tab placeholder-tab" id="btn-tab-help">Help</button>
                 </nav>
 
                 <!-- Header Actions (Sync & Profile) -->
@@ -1177,6 +1175,6 @@
     </div>
 
     <!-- Script Entry -->
-    <script src="app.js?v=0.40.3"></script>
+    <script src="app.js?v=0.41.0"></script>
 </body>
 </html>

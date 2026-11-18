@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.40.3";
+const APP_VERSION = "0.41.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -514,7 +514,7 @@ function renderVersionBadge(busyText) {
         state = "update"; text = `v${running} → Update to v${latestPublishedVersion}`;
         title = `v${latestPublishedVersion} is available on GitHub. Click to update this PC.`;
     } else if (behind.length) {
-        state = "behind"; text = `v${running} · ${behind.length} PC${behind.length > 1 ? "s" : ""} behind`;
+        state = "behind"; text = `${behind.length} PC${behind.length > 1 ? "s" : ""} behind`;
         title = "Runs an older version: " + behind.map(b => `${b.label} (v${b.version})`).join(", ") + ". Click for versions & devices.";
     } else if (Date.now() - selfUpdateDoneAt < 20000) {
         state = "updated"; text = `v${running} ✓ Updated`;
@@ -3399,7 +3399,8 @@ function setRefreshStatus(step) {
         waiting:       { text: "Waiting for PC to pick up the request…",                     cls: "rsb-pending"  },
         "pc-seen":     { text: "PC received the request — scraping in progress…",            cls: "rsb-active"   },
         scraping:      { text: "PC is scraping usage data…",                                 cls: "rsb-active"   },
-        done:          { text: "Data synced from PC!",                                       cls: "rsb-done"     },
+        // Done needs no bar: the toast and the green sync dot already say it.
+        done:          { text: "",                                                            cls: "",               visible: false },
         timeout:       { text: "PC not responding yet. Is Chrome open? Retrying slowly…",   cls: "rsb-warn"     },
         "slow-polling":{ text: "Still waiting for PC (slow retry)…",                        cls: "rsb-warn"     },
         error:         { text: "PC did not respond. Is Chrome open and logged in?",         cls: "rsb-error"    },
@@ -6467,7 +6468,9 @@ function updateMobileSyncIndicator(isSuccess) {
     if (liveSyncHeader) {
         liveSyncHeader.dataset.failed = isSuccess ? "0" : "1";
         liveSyncHeader.style.cursor = isSuccess ? "" : "pointer";
-        liveSyncHeader.title = isSuccess ? "" : "Tap for versions and the update button";
+        liveSyncHeader.title = isSuccess ? `Synced ${formattedTime}` : "Tap for versions and the update button";
+        // Calm header: when all is well only a green dot shows; text only on failure.
+        liveSyncHeader.classList.toggle("sync-ok", !!isSuccess);
     }
 
     if (isSuccess) {
@@ -6895,6 +6898,7 @@ function applyMobileSyncUI() {
         liveSyncHeader.style.borderColor = "rgba(99, 102, 241, 0.26)";
         liveSyncHeader.style.color = "var(--color-gemini)";
         liveSyncHeader.querySelector("span:not(.pulse-dot)").innerText = "Cloud Sync";
+        liveSyncHeader.classList.add("sync-ok");
         liveSyncHeader.querySelector(".pulse-dot").style.backgroundColor = "var(--color-gemini)";
         liveSyncHeader.querySelector(".pulse-dot").style.boxShadow = "0 0 6px var(--color-gemini)";
     }
