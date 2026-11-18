@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.40.1] — 2026-11-18
+
+- Usage by model: hover or tap a block in a day or hour bar to see its model and amount.
+
+---
+
 ## [0.40.0] — 2026-11-18
 
 - Usage by model shows hourly Codex output in local time when you select a day, with green GPT shades and dividers between models.

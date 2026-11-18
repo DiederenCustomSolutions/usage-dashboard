@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.40.0";
+const APP_VERSION = "0.40.1";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5379,13 +5379,16 @@ function usageHoursForDate(hours, date, timeZone) {
     return buckets;
 }
 
-function appendUsageSegments(bar, models, peak, format) {
+function appendUsageSegments(bar, models, peak, format, when = "") {
     const values = [];
     for (const [model, value] of models) {
         const { label, colour } = usageModelLabel(model);
         const segment = document.createElement("span");
         segment.style.background = `var(--um-${colour})`;
         segment.style.height = value / peak * 100 + "%";
+        // Hover or tap shows which model this block is (title alone does nothing on a phone).
+        segment.title = (when ? when + " · " : "") + label + " " + format(value);
+        segment.setAttribute("data-tip", segment.title);
         bar.append(segment);
         values.push(label + " " + format(value));
     }
@@ -5412,7 +5415,8 @@ function renderUsageHours(chart, hours, date) {
         const column = document.createElement("div");
         const bar = document.createElement("div");
         bar.className = "um-hour-bar";
-        bar.title = String(hour).padStart(2, "0") + ":00 · " + appendUsageSegments(bar, models, peak, usageTokens);
+        const when = String(hour).padStart(2, "0") + ":00";
+        bar.title = when + " · " + appendUsageSegments(bar, models, peak, usageTokens, when);
         bar.setAttribute("role", "img");
         bar.setAttribute("aria-label", bar.title);
         column.append(bar);
@@ -5454,8 +5458,8 @@ function renderUsageDetails(panel, item) {
         const bar = document.createElement("button");
         bar.type = "button";
         bar.className = "um-day-bar";
-        const values = appendUsageSegments(bar, day.models, item.hasLog ? day.total : peak, day.fromLog ? usageTokens : format);
         const date = usageDateFormat.format(Date.parse(day.date));
+        const values = appendUsageSegments(bar, day.models, item.hasLog ? day.total : peak, day.fromLog ? usageTokens : format, date);
         bar.title = date + (day.fromLog ? " · Codex log" : "") + " · " + values;
         bar.setAttribute("aria-label", bar.title);
         bar.setAttribute("aria-controls", hourly.id);
@@ -5470,7 +5474,17 @@ function renderUsageDetails(panel, item) {
     });
     const date = selectedUsageDate === null || buttons.has(selectedUsageDate) ? selectedUsageDate : item.week.at(-1)?.date;
     showDate(date);
-    panel.append(chart, hourly);
+    const tip = document.createElement("div");
+    tip.className = "um-tip";
+    tip.setAttribute("aria-live", "polite");
+    const showTip = event => {
+        const segment = event.target.closest?.("[data-tip]");
+        if (segment) tip.textContent = segment.getAttribute("data-tip");
+        else if (event.type === "pointerover") tip.textContent = "";
+    };
+    panel.addEventListener("pointerover", showTip);
+    panel.addEventListener("click", showTip);
+    panel.append(chart, hourly, tip);
     const title = document.createElement("strong");
     title.textContent = item.hasLog ? "Average daily share" : "7-day totals";
     const totalFormat = item.hasLog ? value => usageNumberFormat.format(value) + "%" : format;

@@ -3027,6 +3027,8 @@ body.auth-view .app-container {
 .um-hour-detail {max-width:480px;margin-bottom:12px;color:var(--um-muted)}
 .um-hours {display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:2px;font-size:10px;text-align:center}
 .um-hour-bar {height:42px;border-radius:2px}
+.um-tip {min-height:1.4em;margin:-6px 0 8px;color:var(--um-fg);font-size:12px;font-variant-numeric:tabular-nums}
+.um-day-bar > span:hover,.um-hour-bar > span:hover {filter:brightness(1.25)}
 .um-values {list-style:none;padding:0;margin:4px 0 0;display:grid;gap:3px;max-width:480px}
 .um-values li {display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:7px;align-items:baseline}
 .um-values i {width:8px;height:8px;border-radius:2px}
