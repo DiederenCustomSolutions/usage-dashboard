@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.42.3] — 2026-11-18
+
+- New app icons: full logo for phone and PWA, round (maskable) for Android, simple ring for tab and extension.
+
 ## [0.42.1] — 2026-11-18
 
 - Week donut larger and further from the 5h ring.
