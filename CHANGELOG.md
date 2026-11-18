@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.42.0] — 2026-11-18
+
+- Tile ring now shows % used (5h); remaining stays in the bars below.
+- New small week donut bottom right of the ring, with its own reset line.
+- Reset line 3 px and sharper ring rendering.
+
 ## [0.41.0] — 2026-11-18
 
 - New logo: orange usage ring with a thin reset-timer ring around it.

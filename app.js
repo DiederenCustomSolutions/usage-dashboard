@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.41.0";
+const APP_VERSION = "0.42.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -1958,6 +1958,10 @@ function updateParallelPace(provider, prefix, capPct, timePct) {
     if (timePctLbl) timePctLbl.innerText = `${timePct}%`;
     // Thin outer ring around the tile ring = time left until the session reset.
     if (prefix === "pace") setTimerRing(`ring-time-${provider}`, timePct);
+    if (prefix === "weekly") {
+        const slot = document.getElementById(`week-slot-${provider}`);
+        if (slot) slot.innerHTML = weekDonutHTML(provider, { capPct, timePct });
+    }
     
     // Style capacity bar dynamically based on percentage
     if (capPct < 20) {
@@ -2061,7 +2065,7 @@ function renderDashboardProgress() {
         claudePct = Math.max(0, 100 - Math.round((claudeTokensUsed / claudeSettings.limitTokens) * 100));
     }
     
-    document.getElementById("pct-claude").innerText = `${claudePct}%`;
+    document.getElementById("pct-claude").innerText = `${Math.round(100 - claudePct)}%`;
     const tokensEl = document.getElementById("tokens-claude");
     if (tokensEl) {
         tokensEl.innerText = `${formatNumber(claudeTokensUsed)} / ${formatNumber(claudeSettings.limitTokens)}`;
@@ -2071,7 +2075,7 @@ function renderDashboardProgress() {
         msgCountEl.innerText = state.userLogs.filter(l => l.model === "claude" && (now - l.timestamp) < claudeWindowMs).length;
     }
     document.getElementById("sync-time-claude").innerText = claudeLastSyncTime;
-    setProgressRing("ring-claude", claudePct);
+    setProgressRing("ring-claude", 100 - claudePct);
     renderProfileChips("profile-chips-claude", "claude");
     
     // Estimate reset countdown for Claude
@@ -2269,10 +2273,10 @@ function renderDashboardProgress() {
         }
     }
     
-    document.getElementById("pct-chatgpt").innerText = `${gptPct}%`;
+    document.getElementById("pct-chatgpt").innerText = `${Math.round(100 - gptPct)}%`;
     document.getElementById("sync-time-chatgpt").innerText = gptLastSyncTime;
     document.getElementById("timer-chatgpt").innerText = gptTimerText;
-    setProgressRing("ring-chatgpt", gptPct);
+    setProgressRing("ring-chatgpt", 100 - gptPct);
     renderProfileChips("profile-chips-chatgpt", "chatgpt");
 
     // Calculate ChatGPT 5h Pace Time Remaining
@@ -2342,10 +2346,10 @@ function renderDashboardProgress() {
         geminiPct = Math.max(0, 100 - Math.round((geminiUsed / geminiSettings.limitMessages) * 100));
     }
 
-    document.getElementById("pct-gemini").innerText = `${geminiPct}%`;
+    document.getElementById("pct-gemini").innerText = `${Math.round(100 - geminiPct)}%`;
     document.getElementById("msg-limit-gemini").innerText = `${geminiSettings.limitMessages - geminiUsed} / ${geminiSettings.limitMessages}`;
     document.getElementById("msg-used-gemini").innerText = geminiUsed;
-    setProgressRing("ring-gemini", geminiPct);
+    setProgressRing("ring-gemini", 100 - geminiPct);
 
     let geminiTimePct = 0;
     if (geminiSync && geminiSync.limitReached) {
@@ -2371,10 +2375,10 @@ function renderDashboardProgress() {
         ? Math.max(0, Math.min(100, zaiSync.pctRemaining5h))
         : Math.max(0, 100 - Math.round((zaiUsed / zaiSettings.limitMessages) * 100));
 
-    document.getElementById("pct-zai").innerText = `${zaiPct}%`;
+    document.getElementById("pct-zai").innerText = `${Math.round(100 - zaiPct)}%`;
     document.getElementById("msg-limit-zai").innerText = `${Math.max(0, zaiSettings.limitMessages - zaiUsed)} / ${zaiSettings.limitMessages}`;
     document.getElementById("msg-used-zai").innerText = zaiUsed;
-    setProgressRing("ring-zai", zaiPct);
+    setProgressRing("ring-zai", 100 - zaiPct);
 
     let zaiTimePct = 0;
     if (zaiSync && zaiSync.reset5hAt) {
@@ -2415,8 +2419,8 @@ function renderDashboardProgress() {
 
         // Personal/gratis account zonder 5h: laat de ring + sync-tijd de maandlimiet tonen
         if (!has5h) {
-            document.getElementById("pct-chatgpt").innerText = `${monthPct}%`;
-            setProgressRing("ring-chatgpt", monthPct);
+            document.getElementById("pct-chatgpt").innerText = `${Math.round(100 - monthPct)}%`;
+            setProgressRing("ring-chatgpt", 100 - monthPct);
             setTimerRing("ring-time-chatgpt", m.timePct);
             document.getElementById("sync-time-chatgpt").innerText = "Tab sync: " + formatTimeAgo(monthlySync.lastSynced);
         }
@@ -4920,7 +4924,27 @@ function computeProviderPace(provider, sync, now, monthlySync) {
     return sections;
 }
 
-// Bouwt één card per (profiel × provider) — mét de volledige pace-balken.
+// Small week donut (used) with its own reset line, bottom right of the tile ring.
+function weekDonutHTML(cls, sec) {
+    if (!sec) return "";
+    const used = 100 - Math.max(0, Math.min(100, Number(sec.capPct) || 0));
+    const time = Math.max(0, Math.min(100, Number(sec.timePct) || 0));
+    const r = 19, c = 2 * Math.PI * r, rt = 26, ct = 2 * Math.PI * rt;
+    const timer = time > 0
+        ? `<circle class="progress-ring__timer" r="${rt}" cx="30" cy="30" style="stroke-dasharray:${ct} ${ct}; stroke-dashoffset:${ct - (time / 100) * ct};"/>`
+        : "";
+    return `<div class="week-donut" title="Week: ${Math.round(used)}% used">
+        <svg class="progress-ring" width="60" height="60" viewBox="0 0 60 60">
+            ${timer}
+            <circle cx="30" cy="30" r="${r}" fill="#10142a" stroke="rgba(255,255,255,0.07)" stroke-width="6"/>
+            <circle class="progress-ring__circle ${cls}-stroke week-donut__arc" cx="30" cy="30" r="${r}" stroke-width="6" fill="none"
+                style="stroke-dasharray:${c} ${c}; stroke-dashoffset:${c - (used / 100) * c};"/>
+        </svg>
+        <div class="week-donut__val"><span>${Math.round(used)}%</span><small>week</small></div>
+    </div>`;
+}
+
+// Bouwtéén card per (profiel × provider) — mét de volledige pace-balken.
 function buildSnapshotCard(provider, profile) {
     const meta = PROVIDER_META[provider];
     if (!meta) return "";
@@ -4942,8 +4966,10 @@ function buildSnapshotCard(provider, profile) {
     else if (provider === "zai")     pct = sync.pctRemaining5h ?? sync.pctRemaining;
 
     const pctNum = (pct === undefined || pct === null) ? 100 : Math.max(0, Math.min(100, pct));
+    // The ring and centre show what is used; the pace bars below keep "remaining".
+    const usedNum = 100 - pctNum;
     const r = 60, circ = 2 * Math.PI * r;
-    const offset = circ - (pctNum / 100) * circ;
+    const offset = circ - (usedNum / 100) * circ;
     const onlineSt    = profileOnlineStatus(profile.lastSeen);
     const lastSynced  = sync.lastSynced ? formatTimeAgo(sync.lastSynced) : "—";
     const customLabel = getBlockLabel(profile.id, provider);
@@ -4966,6 +4992,8 @@ function buildSnapshotCard(provider, profile) {
     const timerHTML = timeNum > 0
         ? `<circle class="progress-ring__timer" r="${rt}" cx="65" cy="65" style="stroke-dasharray:${circT} ${circT}; stroke-dashoffset:${circT - (timeNum / 100) * circT};"/>`
         : "";
+    const ringIs5h = !!ringSec && /^(5 Hour|Current Session)/.test(ringSec.title);
+    const weekHTML = weekDonutHTML(meta.cls, paceSections.find(s => /^Weekly/.test(s.title) && s.capPct !== undefined && s.capPct !== null));
 
     return `
     <div class="glass-panel provider-card ${meta.cls}-card mp-card" data-tile-key="${escapeHtmlSafe(tileKey(profile.id, provider))}">
@@ -4995,9 +5023,10 @@ function buildSnapshotCard(provider, profile) {
                         style="stroke-dasharray:${circ} ${circ}; stroke-dashoffset:${offset};"/>
                 </svg>
                 <div class="progress-value">
-                    <span class="pct" style="font-size:1.6rem;">${fmtPct(pct)}</span>
-                    <span class="lbl">Left</span>
+                    <span class="pct" style="font-size:1.6rem;">${(pct === undefined || pct === null) ? "—" : `${Math.round(usedNum)}%`}</span>
+                    <span class="lbl">Used${ringIs5h ? " · 5h" : ""}</span>
                 </div>
+                ${weekHTML}
             </div>
         </div>
         <div class="card-stats">
