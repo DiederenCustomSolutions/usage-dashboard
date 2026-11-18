@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.40.2";
+const APP_VERSION = "0.40.3";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5466,8 +5466,11 @@ function renderUsageDetails(panel, item) {
         bar.setAttribute("aria-label", bar.title);
         bar.setAttribute("aria-controls", hourly.id);
         buttons.set(day.date, bar);
-        bar.addEventListener("click", () => {
-            selectedUsageDate = bar.getAttribute("aria-pressed") === "true" ? null : day.date;
+        bar.addEventListener("click", event => {
+            // Picking another block in the open day keeps it open; only a repeat click closes it.
+            const segment = event?.target?.closest?.("[data-tip]");
+            const repeat = bar.getAttribute("aria-pressed") === "true" && (!segment || segment.classList.contains("um-picked"));
+            selectedUsageDate = repeat ? null : day.date;
             showDate(selectedUsageDate);
         });
         column.append(bar, date);
@@ -5488,8 +5491,11 @@ function renderUsageDetails(panel, item) {
                 segment.classList.add("um-picked");
             }
         }
-        else if (event.type === "pointerover") tip.textContent = "";
+        else if (event.type === "pointerover") restoreTip();
     };
+    // Leaving a block shows the picked block again, so its text stays.
+    const restoreTip = () => { tip.textContent = panel.querySelector(".um-picked")?.getAttribute("data-tip") || ""; };
+    panel.addEventListener("pointerleave", restoreTip);
     panel.addEventListener("pointerover", showTip);
     panel.addEventListener("click", showTip);
     panel.append(chart, hourly, tip);

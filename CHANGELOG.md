@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.40.3] — 2026-11-18
+
+- Usage by model: the picked block keeps its text, has a dashed ring, and picking a block no longer closes the open day.
+
+---
+
 ## [0.40.2] — 2026-11-18
 
 - Usage by model: the picked block gets a thin white ring instead of an amber frame.
