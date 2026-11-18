@@ -4,8 +4,11 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
-## [Nog niet uitgebracht]
+## [0.38.0] — 2026-11-18
 
+- Usage by model shows Planner account names, seven-day model totals and Claude weekly limits. Select a row to see the breakdown.
+- Daily model usage adds duplicate entries and recognises GPT families and variants.
+- Manual refresh shares the Firebase metadata read and fetches independent ChatGPT reports in parallel.
 - **Codex monthly reset times stay the same across time zones.** The dashboard uses the reset timestamp and can still read reset text from older extensions.
 - **Job usage is recorded per round.** `GET /v1/klussen` includes each recorded round’s account, session, reasoning effort, limit readings, weekly reset time and exit code. PCs retain rounds locally until the API confirms ingestion protocol 3.
 - **Ingestion protocol 2 confirms job reasoning effort.** A regular sync probes for support whenever jobs still have protocol 1 acknowledgements, then resubmits those jobs with effort after the upgrade.
@@ -18,14 +21,6 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 - **SQLite waits 5 s on a lock** instead of failing the inname at once.
 - **QR codes are made locally.** "Add profile" and "Mobile sync" no longer send the pairing link (with key) to an external QR service; `lib/qrcode.min.js` (qrcode-generator 1.4.4, MIT) draws an SVG.
 - **Webapp test runs without personal data** (fixture in `meetscripts/fixtures/`), plus a QR regression test.
-
----
-
-## [0.38.0] — 2026-11-18
-
-- Usage by model shows Planner account names, seven-day model totals and Claude weekly limits. Select a row to see the breakdown.
-- Daily model usage adds duplicate entries and recognises GPT families and variants.
-- Manual refresh shares the Firebase metadata read and fetches independent ChatGPT reports in parallel.
 
 ---
 
