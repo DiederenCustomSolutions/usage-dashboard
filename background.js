@@ -415,9 +415,10 @@ async function fetchCodexModelUsage(checkedAt) {
         const { ud_codexlog: config } = await chrome.storage.local.get("ud_codexlog");
         if (!config || typeof config.token !== "string" || !config.token.trim() ||
             typeof config.account !== "string" || !config.account.trim()) return;
-        const van = new Date(checkedAt - 6 * 86400000).toISOString().slice(0, 10);
+        const weekStart = new Date(checkedAt - 6 * 86400000).toISOString().slice(0, 10);
+        const van = new Date(checkedAt - 7 * 86400000).toISOString().slice(0, 10);
         const tot = new Date(checkedAt).toISOString().slice(0, 10);
-        const response = await fetch(`http://127.0.0.1:8787/v1/verbruik?van=${van}&tot=${tot}&groep=dag,account,model&bron=codex`, {
+        const response = await fetch(`http://127.0.0.1:8787/v1/verbruik?van=${van}&tot=${tot}&groep=dag,uur,account,model&bron=codex`, {
             headers: { Authorization: "Bearer " + config.token },
             credentials: "omit", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(3000)
         });
@@ -425,16 +426,25 @@ async function fetchCodexModelUsage(checkedAt) {
         const { rijen } = await response.json();
         if (!Array.isArray(rijen)) return;
         const byDate = new Map();
+        const byHour = new Map();
+        const addOutput = (buckets, key, model, output) => {
+            if (!buckets.has(key)) buckets.set(key, Object.create(null));
+            const models = buckets.get(key);
+            models[model] = (models[model] || 0) + output;
+        };
         for (const row of rijen) {
             if (!row || row.account !== config.account || !/^\d{4}-\d{2}-\d{2}$/.test(row.dag) ||
                 row.dag < van || row.dag > tot || typeof row.model !== "string" || !row.model ||
                 !Number.isFinite(row.output) || row.output <= 0) continue;
-            if (!byDate.has(row.dag)) byDate.set(row.dag, Object.create(null));
-            const models = byDate.get(row.dag);
-            models[row.model] = (models[row.model] || 0) + row.output;
+            if (row.dag >= weekStart) addOutput(byDate, row.dag, row.model, row.output);
+            if (typeof row.uur === "string" && row.uur.slice(0, 10) === row.dag &&
+                /^T(?:[01]\d|2[0-3]):00:00Z$/.test(row.uur.slice(10))) {
+                addOutput(byHour, row.uur, row.model, row.output);
+            }
         }
         const days = [...byDate.keys()].sort().map(date => ({ date, models: byDate.get(date) }));
-        return { days, units: "tokens", source: "codex-log", checkedAt };
+        const hours = [...byHour.keys()].sort().map(t => ({ t, models: byHour.get(t) }));
+        return { days, hours, units: "tokens", source: "codex-log", checkedAt };
     } catch {
         // The optional local service can be unavailable. Keep the ChatGPT measurement.
     }

@@ -119,6 +119,7 @@ async function main() {
         await cdp.call('Page.enable');
         await cdp.call('Network.enable');
         await cdp.call('Network.setBypassServiceWorker',{bypass:true});
+        await cdp.call('Emulation.setTimezoneOverride',{timezoneId:'Europe/Amsterdam'});
         await cdp.call('Emulation.setDeviceMetricsOverride',{width:1400,height:900,deviceScaleFactor:1,mobile:false});
         cdp.on('Fetch.requestPaused', async e=> {
             try {
@@ -263,21 +264,56 @@ async function main() {
             return button.getAttribute('aria-expanded') === 'true' && !panel.hidden &&
                 panel.querySelectorAll('.um-day-bar').length === 7 &&
                 panel.querySelectorAll('.um-day-bar:empty').length === 5 &&
+                panel.querySelectorAll('button.um-day-bar')[6].getAttribute('aria-pressed') === 'true' &&
+                panel.querySelector('.um-hour-detail').textContent === 'No hourly data' &&
+                !button.textContent.includes('No hourly data') &&
                 panel.querySelector('.um-values').textContent === 'Sol 63%Luna 61%' &&
                 button.querySelector('.um-tot').textContent === '21 Oct';
         })()`);
+        await cdp.evaluate(`
+            state.cloudProfiles.one.syncStatus.chatgpt.modelUsageLog = {
+                checkedAt: Date.parse('2026-10-22T12:00:00Z'), days: [], hours: [
+                    {t:'2026-10-20T22:00:00Z',models:{'gpt-6-sol':2}},
+                    {t:'2026-10-21T22:00:00Z',models:{'gpt-6.2-astra':1200000,'gpt-6-sol':300000}}
+                ]
+            };
+            renderUsageByModel();
+        `);
+        await check('Latest day opens with 24 local hours and model totals',`(() => {
+            const bars = document.querySelectorAll('.um-hour-bar');
+            return bars.length === 24 && bars[0].title === '00:00 · Astra 6.2 1.2M tok, Sol 6 300K tok' &&
+                bars[0].firstElementChild.style.height === '80%' && bars[1].title === '01:00 · No usage' &&
+                document.querySelector('.um-hours').textContent === '061218';
+        })()`);
+        await cdp.evaluate("document.querySelectorAll('.um-day-bar')[5].click()");
+        await check('Click switches the hourly breakdown',`document.querySelectorAll('.um-hour-bar').length === 24 &&
+            document.querySelector('.um-hour-bar').title === '00:00 · Sol 6 2 tok' &&
+            document.querySelectorAll('.um-day-bar[aria-pressed="true"]').length === 1 &&
+            document.querySelectorAll('.um-day-bar')[5].getAttribute('aria-pressed') === 'true'`);
+        await cdp.evaluate("document.querySelectorAll('.um-day-bar')[5].click()");
+        await check('Second click closes the hourly breakdown',`document.querySelector('.um-hour-detail').hidden &&
+            !document.querySelector('.um-hour-bar, .um-day-bar[aria-pressed="true"]')`);
+        await cdp.evaluate("document.querySelectorAll('.um-day-bar')[5].focus()");
+        await press('Enter','Enter',13);
+        await check('Enter opens hours and keeps focus on the chosen day',`document.querySelectorAll('.um-hour-bar').length === 24 &&
+            document.activeElement === document.querySelector('.um-day-bar[aria-pressed="true"]')`);
         for (const theme of ['light','dark']) {
             await cdp.call('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:theme}]});
             await check('Expanded tile fits 375px in '+theme,`(() => {
                 const tile = document.querySelector('#usage-by-model');
                 const right = tile.getBoundingClientRect().right;
                 return right <= 375 && tile.scrollWidth <= tile.clientWidth &&
-                    document.querySelector('.um-week').getBoundingClientRect().right <= right;
+                    document.querySelector('.um-week').getBoundingClientRect().right <= right &&
+                    document.querySelector('.um-hours').getBoundingClientRect().right <= right;
             })()`);
         }
+        await cdp.evaluate("document.querySelector('.um-row').focus()");
         await press(' ','Space',32);
         await check('Space closes the focused row',"document.querySelector('.um-row').getAttribute('aria-expanded') === 'false' && document.querySelector('.um-detail').hidden");
-        await cdp.evaluate("document.querySelector('.um-row').click();document.querySelectorAll('.um-row')[1].click()");
+        await cdp.evaluate("document.querySelector('.um-row').click()");
+        await check('Reopening the panel selects its latest day',`document.querySelectorAll('.um-day-bar')[6].getAttribute('aria-pressed') === 'true' &&
+            document.querySelectorAll('.um-hour-bar').length === 24`);
+        await cdp.evaluate("document.querySelectorAll('.um-row')[1].click()");
         await check('Claude detail shows shares and weekly limit',`(() => {
             const panel = document.querySelector('.um-detail:not([hidden])');
             return document.querySelectorAll('.um-row[aria-expanded="true"]').length === 1 &&
