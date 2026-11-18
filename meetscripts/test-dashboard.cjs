@@ -283,7 +283,8 @@ async function main() {
             const bars = document.querySelectorAll('.um-hour-bar');
             return bars.length === 24 && bars[0].title === '00:00 · Astra 6.2 1.2M tok, Sol 6 300K tok' &&
                 bars[0].firstElementChild.style.height === '80%' && bars[1].title === '01:00 · No usage' &&
-                document.querySelector('.um-hours').textContent === '061218';
+                document.querySelector('.um-hours').textContent === '0003060912151821' &&
+                bars[0].firstElementChild.getAttribute('data-tip') === '00:00 · Astra 6.2 1.2M tok · 80%';
         })()`);
         await cdp.evaluate("document.querySelectorAll('.um-day-bar')[5].click()");
         await check('Click switches the hourly breakdown',`document.querySelectorAll('.um-hour-bar').length === 24 &&

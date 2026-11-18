@@ -5381,13 +5381,15 @@ function usageHoursForDate(hours, date, timeZone) {
 
 function appendUsageSegments(bar, models, peak, format, when = "") {
     const values = [];
+    let total = 0; // models is a Map (hours) or [model, value] pairs (days)
+    for (const [, value] of models) total += value;
     for (const [model, value] of models) {
         const { label, colour } = usageModelLabel(model);
         const segment = document.createElement("span");
         segment.style.background = `var(--um-${colour})`;
         segment.style.height = value / peak * 100 + "%";
         // Hover or tap shows which model this block is (title alone does nothing on a phone).
-        segment.title = (when ? when + " · " : "") + label + " " + format(value);
+        segment.title = (when ? when + " · " : "") + label + " " + format(value) + " · " + Math.round(value / total * 100) + "%";
         segment.setAttribute("data-tip", segment.title);
         bar.append(segment);
         values.push(label + " " + format(value));
@@ -5420,7 +5422,7 @@ function renderUsageHours(chart, hours, date) {
         bar.setAttribute("role", "img");
         bar.setAttribute("aria-label", bar.title);
         column.append(bar);
-        if (hour % 6 === 0) column.append(String(hour));
+        if (hour % 3 === 0) column.append(Object.assign(document.createElement("span"), { className: "um-hour-tick", textContent: String(hour).padStart(2, "0") }));
         grid.append(column);
     });
     chart.append(grid);
@@ -5479,7 +5481,13 @@ function renderUsageDetails(panel, item) {
     tip.setAttribute("aria-live", "polite");
     const showTip = event => {
         const segment = event.target.closest?.("[data-tip]");
-        if (segment) tip.textContent = segment.getAttribute("data-tip");
+        if (segment) {
+            tip.textContent = segment.getAttribute("data-tip");
+            if (event.type === "click") {
+                panel.querySelectorAll(".um-picked").forEach(picked => picked.classList.remove("um-picked"));
+                segment.classList.add("um-picked");
+            }
+        }
         else if (event.type === "pointerover") tip.textContent = "";
     };
     panel.addEventListener("pointerover", showTip);

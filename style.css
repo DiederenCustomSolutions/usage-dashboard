@@ -3025,7 +3025,9 @@ body.auth-view .app-container {
 .um-day-bar:focus-visible {outline:2px solid var(--um-fg);outline-offset:2px}
 .um-day-bar > span + span,.um-hour-bar > span + span {box-shadow:inset 0 -1px 0 rgba(0,0,0,.45)}
 .um-hour-detail {max-width:480px;margin-bottom:12px;color:var(--um-muted)}
-.um-hours {display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:2px;font-size:10px;text-align:center}
+.um-hours {display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:2px;font-size:11px;text-align:center}
+.um-hour-tick {display:block;margin-top:1px;padding-top:2px;border-top:1px solid var(--um-line2);color:var(--um-fg);opacity:.8;white-space:nowrap;font-variant-numeric:tabular-nums}
+.um-day-bar > .um-picked,.um-hour-bar > .um-picked {outline:2px solid var(--um-fg);outline-offset:-2px}
 .um-hour-bar {height:42px;border-radius:2px}
 .um-tip {min-height:1.4em;margin:-6px 0 8px;color:var(--um-fg);font-size:12px;font-variant-numeric:tabular-nums}
 .um-day-bar > span:hover,.um-hour-bar > span:hover {filter:brightness(1.25)}
