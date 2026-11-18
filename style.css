@@ -187,18 +187,13 @@ body.auth-view .app-container {
     gap: 0.42rem;
     position: relative;
     z-index: 100;
-    background:
-        radial-gradient(circle at 8% 50%, rgba(0, 242, 254, 0.12), transparent 28%),
-        linear-gradient(135deg, rgba(8, 14, 25, 0.86), rgba(9, 13, 24, 0.74)) !important;
-    backdrop-filter: blur(24px) saturate(185%);
-    -webkit-backdrop-filter: blur(24px) saturate(185%);
+    /* Flat bar: no haze, no outer glow. */
+    background: rgba(16, 20, 42, 0.92) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border-radius: 9999px;
-    border: 1px solid rgba(91, 147, 255, 0.38) !important;
-    box-shadow:
-        0 14px 36px rgba(0, 0, 0, 0.46),
-        0 0 0 1px rgba(12, 241, 255, 0.08),
-        0 0 24px rgba(59, 130, 246, 0.28),
-        inset 0 1px 0 rgba(255, 255, 255, 0.09);
+    border: 1px solid rgba(120, 135, 200, 0.18) !important;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
 
 .parallel-status {
@@ -228,10 +223,9 @@ body.auth-view .app-container {
     width: 34px;
     height: 34px;
     display: block;
-    border-radius: 50%;
+    border-radius: 9px;
     object-fit: cover;
-    filter: drop-shadow(0 0 9px rgba(0, 242, 254, 0.58));
-    animation: slow-glow 4s ease-in-out infinite alternate;
+    filter: drop-shadow(0 0 6px rgba(240, 149, 62, 0.28));
 }
 
 @keyframes slow-glow {
@@ -295,6 +289,20 @@ body.auth-view .app-container {
     color: var(--text-muted);
     transition: background 0.2s ease, border-color 0.2s ease;
 }
+
+/* Calm header: all well = green dot only, no version chip. */
+.header-sync-status.sync-ok {
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none;
+    padding: 0.24rem 0.2rem;
+}
+.header-sync-status.sync-ok span:not(.pulse-dot) { display: none; }
+.header-sync-status.sync-ok .pulse-dot {
+    background-color: #4ade80 !important;
+    box-shadow: 0 0 6px rgba(74, 222, 128, 0.7) !important;
+}
+.version-badge[data-state="ok"] { display: none; }
 
 .version-badge:hover {
     background: rgba(255, 255, 255, 0.1);
@@ -491,16 +499,16 @@ body.auth-view .app-container {
 
 .sync-shortcut-icon.claude {
     background: transparent;
-    border-color: rgba(0, 242, 254, 0.48);
+    border-color: rgba(217, 119, 87, 0.5);
     box-shadow:
-        0 0 12px rgba(0, 242, 254, 0.28),
+        0 0 12px rgba(217, 119, 87, 0.25),
         inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .sync-shortcut-icon.claude:hover {
-    border-color: #00f2fe;
+    border-color: #d97757;
     box-shadow:
-        0 0 16px rgba(0, 242, 254, 0.46),
+        0 0 16px rgba(217, 119, 87, 0.45),
         inset 0 1px 0 rgba(255, 255, 255, 0.24);
     transform: translateY(-1px);
 }
@@ -920,6 +928,12 @@ body.auth-view .app-container {
     font-size: 1.4rem;
 }
 
+.brand-icon-wrapper .brand-mark {
+    width: 22px;
+    height: 22px;
+    display: block;
+}
+
 .brand-icon-wrapper.claude {
     background: rgba(var(--color-claude-rgb), 0.12);
     color: var(--color-claude);
@@ -972,6 +986,17 @@ body.auth-view .app-container {
 
 .progress-ring {
     transform: rotate(-90deg);
+    overflow: visible;
+}
+
+/* Thin gray outer ring: time left until reset (same look as the logo). */
+.progress-ring__timer {
+    fill: none;
+    stroke: #a7adc4;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    opacity: 0.85;
+    transition: stroke-dashoffset 0.6s ease;
 }
 
 .progress-ring__circle {
@@ -2053,6 +2078,31 @@ body.auth-view .app-container {
         display: none;
     }
 
+    /* Phone: tabs become a bottom bar within thumb reach.
+       backdrop-filter on the header would trap the fixed bar inside it. */
+    .app-header {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
+    .app-header .nav-tabs {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 900;
+        width: 100%;
+        margin: 0;
+        justify-content: space-around;
+        border-radius: 0;
+        padding: 0.35rem 0.5rem calc(0.35rem + env(safe-area-inset-bottom));
+        background: rgba(10, 14, 28, 0.96);
+        border-top: 1px solid rgba(91, 147, 255, 0.25);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+    }
+    .app-header .nav-tabs .nav-tab { flex: 1 1 0; text-align: center; }
+    #dashboard-container { padding-bottom: calc(3.4rem + env(safe-area-inset-bottom)); }
+
     .nav-tab {
         padding: 0.46rem 0.72rem;
         font-size: 0.7rem;
@@ -2524,6 +2574,26 @@ body.auth-view .app-container {
 .ps-status-dot {
     width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
 }
+/* U1: avatar inside the profile pill; status dot on its corner. */
+.profile-switcher-btn { padding: 3px 10px 3px 3px; max-width: 200px; }
+.ps-avatar { position: relative; width: 26px; height: 26px; flex-shrink: 0; }
+.ps-avatar img { width: 26px; height: 26px; border-radius: 50%; display: block; }
+.ps-avatar .ps-status-dot {
+    position: absolute; right: -1px; bottom: -1px;
+    border: 2px solid #10142a; width: 9px; height: 9px;
+}
+.psm-site-link img { width: 14px; height: 14px; }
+a.psm-manage-btn { text-decoration: none; }
+.psm-user {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 10px 8px 16px;
+}
+.psm-username { font-size: 0.78rem; color: rgba(255,255,255,0.75); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.psm-logout {
+    background: none; border: 1px solid rgba(255,255,255,0.1); border-radius: 7px;
+    color: var(--text-muted); font-size: 0.74rem; padding: 4px 8px; cursor: pointer; white-space: nowrap;
+}
+.psm-logout:hover { color: #fff; border-color: rgba(255,255,255,0.25); }
 #ps-label {
     overflow: hidden; text-overflow: ellipsis; max-width: 100px;
 }

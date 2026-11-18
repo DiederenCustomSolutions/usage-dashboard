@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.40.3";
+const APP_VERSION = "0.41.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -506,6 +506,16 @@ function renderVersionBadge(busyText) {
         });
     }
     const running = runningVersion();
+    // The logo opens versions and devices (the chip itself only shows when something is off).
+    const logo = document.querySelector(".app-header .logo-icon-wrapper");
+    if (logo) {
+        logo.title = `v${running}`;
+        if (!logo.dataset.wired) {
+            logo.dataset.wired = "1";
+            logo.style.cursor = "pointer";
+            logo.addEventListener("click", () => openVersionsAndUpdateBlock());
+        }
+    }
     const behind = (versionPeerState && versionPeerState.behind) || [];
     let state = "ok", text = `v${running}`, title = `This dashboard runs v${running}. Click for versions & devices.`;
     if (busyText) {
@@ -514,7 +524,7 @@ function renderVersionBadge(busyText) {
         state = "update"; text = `v${running} → Update to v${latestPublishedVersion}`;
         title = `v${latestPublishedVersion} is available on GitHub. Click to update this PC.`;
     } else if (behind.length) {
-        state = "behind"; text = `v${running} · ${behind.length} PC${behind.length > 1 ? "s" : ""} behind`;
+        state = "behind"; text = `${behind.length} PC${behind.length > 1 ? "s" : ""} behind`;
         title = "Runs an older version: " + behind.map(b => `${b.label} (v${b.version})`).join(", ") + ". Click for versions & devices.";
     } else if (Date.now() - selfUpdateDoneAt < 20000) {
         state = "updated"; text = `v${running} ✓ Updated`;
@@ -1946,6 +1956,8 @@ function updateParallelPace(provider, prefix, capPct, timePct) {
     
     timeBar.style.width = `${timePct}%`;
     if (timePctLbl) timePctLbl.innerText = `${timePct}%`;
+    // Thin outer ring around the tile ring = time left until the session reset.
+    if (prefix === "pace") setTimerRing(`ring-time-${provider}`, timePct);
     
     // Style capacity bar dynamically based on percentage
     if (capPct < 20) {
@@ -2405,6 +2417,7 @@ function renderDashboardProgress() {
         if (!has5h) {
             document.getElementById("pct-chatgpt").innerText = `${monthPct}%`;
             setProgressRing("ring-chatgpt", monthPct);
+            setTimerRing("ring-time-chatgpt", m.timePct);
             document.getElementById("sync-time-chatgpt").innerText = "Tab sync: " + formatTimeAgo(monthlySync.lastSynced);
         }
     } else if (secMonth) {
@@ -2528,6 +2541,15 @@ function setProgressRing(ringId, percent) {
     ring.style.strokeDasharray = `${circumference} ${circumference}`;
     const offset = circumference - (percent / 100) * circumference;
     ring.style.strokeDashoffset = offset;
+}
+
+// Timer ring: hidden when the reset time is unknown (0%).
+function setTimerRing(ringId, percent) {
+    const ring = document.getElementById(ringId);
+    if (!ring) return;
+    const p = Math.max(0, Math.min(100, Number(percent) || 0));
+    ring.style.display = p > 0 ? "" : "none";
+    if (p > 0) setProgressRing(ringId, p);
 }
 
 /* ==========================================================================
@@ -3399,7 +3421,8 @@ function setRefreshStatus(step) {
         waiting:       { text: "Waiting for PC to pick up the request…",                     cls: "rsb-pending"  },
         "pc-seen":     { text: "PC received the request — scraping in progress…",            cls: "rsb-active"   },
         scraping:      { text: "PC is scraping usage data…",                                 cls: "rsb-active"   },
-        done:          { text: "Data synced from PC!",                                       cls: "rsb-done"     },
+        // Done needs no bar: the toast and the green sync dot already say it.
+        done:          { text: "",                                                            cls: "",               visible: false },
         timeout:       { text: "PC not responding yet. Is Chrome open? Retrying slowly…",   cls: "rsb-warn"     },
         "slow-polling":{ text: "Still waiting for PC (slow retry)…",                        cls: "rsb-warn"     },
         error:         { text: "PC did not respond. Is Chrome open and logged in?",         cls: "rsb-error"    },
@@ -4499,8 +4522,8 @@ function renderProfileBar() {
    MULTI-PROFILE GRID — één card per (profiel × abonnement) in de "All"-weergave
    ========================================================================== */
 const PROVIDER_META = {
-    claude:  { name: "Claude Pro",      meta: "Anthropic",  icon: "fa-compass-drafting",    cls: "claude" },
-    chatgpt: { name: "ChatGPT",         meta: "OpenAI",     icon: "fa-robot",               cls: "chatgpt" },
+    claude:  { name: "Claude Pro",      meta: "Anthropic",  icon: "fa-compass-drafting",    cls: "claude", img: "assets/claude-mark.svg" },
+    chatgpt: { name: "ChatGPT",         meta: "OpenAI",     icon: "fa-robot",               cls: "chatgpt", img: "assets/openai-mark.svg" },
     gemini:  { name: "Gemini Advanced", meta: "Google",     icon: "fa-wand-magic-sparkles", cls: "gemini" },
     zai:     { name: "Z.Ai",            meta: "GLM",        icon: "fa-brain",               cls: "zai" }
 };
@@ -4932,9 +4955,17 @@ function buildSnapshotCard(provider, profile) {
         ? `<div class="sync-status-indicator mb-2" style="color:var(--accent-red);"><i class="fa-solid fa-triangle-exclamation"></i> <span>${escapeHtmlSafe(profile.lastError.message)}</span>${loginButtonsHTML(profile)}</div>`
         : "";
 
-    const sectionsHTML = computeProviderPace(provider, sync, now, monthlySync)
+    const paceSections = computeProviderPace(provider, sync, now, monthlySync);
+    const sectionsHTML = paceSections
         .map(s => paceSectionHTML(s.title, meta.cls, s.capPct, s.timePct, s.resetLabel))
         .join("");
+    // Timer ring = time left in the window the ring shows.
+    const ringSec = paceSections.find(s => s.capPct === pct) || paceSections[0];
+    const timeNum = ringSec ? Math.max(0, Math.min(100, Number(ringSec.timePct) || 0)) : 0;
+    const rt = 69, circT = 2 * Math.PI * rt;
+    const timerHTML = timeNum > 0
+        ? `<circle class="progress-ring__timer" r="${rt}" cx="65" cy="65" style="stroke-dasharray:${circT} ${circT}; stroke-dashoffset:${circT - (timeNum / 100) * circT};"/>`
+        : "";
 
     return `
     <div class="glass-panel provider-card ${meta.cls}-card mp-card" data-tile-key="${escapeHtmlSafe(tileKey(profile.id, provider))}">
@@ -4943,7 +4974,7 @@ function buildSnapshotCard(provider, profile) {
         </button>
         <div class="provider-header">
             <div class="provider-title">
-                <div class="brand-icon-wrapper ${meta.cls}"><i class="fa-solid ${meta.icon}"></i></div>
+                <div class="brand-icon-wrapper ${meta.cls}">${meta.img ? `<img src="${meta.img}" class="brand-mark" alt="">` : `<i class="fa-solid ${meta.icon}"></i>`}</div>
                 <div>
                     <h3>${meta.name}</h3>
                     <span class="provider-meta">
@@ -4958,6 +4989,7 @@ function buildSnapshotCard(provider, profile) {
         <div class="progress-visualization">
             <div class="progress-ring-container" style="width:130px;height:130px;">
                 <svg class="progress-ring" width="130" height="130">
+                    ${timerHTML}
                     <circle class="progress-ring__circle-bg" stroke="rgba(255,255,255,0.04)" stroke-width="11" fill="transparent" r="${r}" cx="65" cy="65"/>
                     <circle class="progress-ring__circle ${meta.cls}-stroke" stroke-width="11" fill="transparent" r="${r}" cx="65" cy="65"
                         style="stroke-dasharray:${circ} ${circ}; stroke-dashoffset:${offset};"/>
@@ -6467,7 +6499,9 @@ function updateMobileSyncIndicator(isSuccess) {
     if (liveSyncHeader) {
         liveSyncHeader.dataset.failed = isSuccess ? "0" : "1";
         liveSyncHeader.style.cursor = isSuccess ? "" : "pointer";
-        liveSyncHeader.title = isSuccess ? "" : "Tap for versions and the update button";
+        liveSyncHeader.title = isSuccess ? `Synced ${formattedTime}` : "Tap for versions and the update button";
+        // Calm header: when all is well only a green dot shows; text only on failure.
+        liveSyncHeader.classList.toggle("sync-ok", !!isSuccess);
     }
 
     if (isSuccess) {
@@ -6806,6 +6840,8 @@ function applyMobileSyncUI() {
         // Verberg de directe scrape links op mobiel
         syncActions.querySelectorAll(".sync-shortcut-icon").forEach(el => el.style.display = "none");
     }
+    const siteLinks = document.querySelector(".psm-site-links");
+    if (siteLinks) siteLinks.style.display = "none";
     
     const refreshAllBtn = document.getElementById("btn-sync-all");
     if (refreshAllBtn) {
@@ -6895,6 +6931,7 @@ function applyMobileSyncUI() {
         liveSyncHeader.style.borderColor = "rgba(99, 102, 241, 0.26)";
         liveSyncHeader.style.color = "var(--color-gemini)";
         liveSyncHeader.querySelector("span:not(.pulse-dot)").innerText = "Cloud Sync";
+        liveSyncHeader.classList.add("sync-ok");
         liveSyncHeader.querySelector(".pulse-dot").style.backgroundColor = "var(--color-gemini)";
         liveSyncHeader.querySelector(".pulse-dot").style.boxShadow = "0 0 6px var(--color-gemini)";
     }
