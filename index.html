@@ -19,7 +19,7 @@
     <!-- Chart.js for Analytics (bundled locally — CDN blocked by MV3 CSP) -->
     <script src="lib/chart.min.js"></script>
     <script src="lib/qrcode.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=0.42.2">
+    <link rel="stylesheet" href="style.css?v=0.43.0">
 </head>
 <body>
     <!-- Animated Ambient Background Blobs -->
@@ -675,87 +675,116 @@
 
                 <!-- 3. ANALYTICS TAB -->
                 <section id="tab-analytics" class="tab-pane">
-                    <!-- Quick Statistics Grid -->
-                    <div class="analytics-summary-grid mb-4">
-                        <div class="glass-panel summary-card border-claude">
-                            <span class="summary-label">Total Claude (7d)</span>
-                            <span class="summary-value" id="stats-total-claude">0 t</span>
-                            <span class="summary-subtext" id="stats-avg-claude">Avg. 0 t / day</span>
-                        </div>
-                        <div class="glass-panel summary-card border-chatgpt">
-                            <span class="summary-label">Total ChatGPT (7d)</span>
-                            <span class="summary-value" id="stats-total-chatgpt">0 m</span>
-                            <span class="summary-subtext" id="stats-avg-chatgpt">Avg. 0 / day</span>
-                        </div>
-                        <div class="glass-panel summary-card border-gemini">
-                            <span class="summary-label">Total Gemini (7d)</span>
-                            <span class="summary-value" id="stats-total-gemini">0 m</span>
-                            <span class="summary-subtext" id="stats-avg-gemini">Avg. 0 / day</span>
-                        </div>
-                        <div class="glass-panel summary-card border-zai">
-                            <span class="summary-label">Total Z.Ai (7d)</span>
-                            <span class="summary-value" id="stats-total-zai">0 m</span>
-                            <span class="summary-subtext" id="stats-avg-zai">Avg. 0 / day</span>
-                        </div>
-                        <div class="glass-panel summary-card border-accent">
-                            <span class="summary-label">Busiest Day (7d)</span>
-                            <span class="summary-value" id="stats-peak-day">-</span>
-                            <span class="summary-subtext" id="stats-peak-value">0 activities</span>
-                        </div>
-                    </div>
-
                     <div class="glass-panel">
-                        <h3><i class="fa-solid fa-chart-line"></i> Usage Statistics</h3>
-                        <p class="section-desc">Graphical view of your recorded messages over the past week.</p>
-
-                        <div class="chart-container mt-4">
-                            <canvas id="usage-chart"></canvas>
-                        </div>
-                    </div>
-
-                    <div class="glass-panel mt-4">
-                        <h3><i class="fa-solid fa-history"></i> Full Log History</h3>
-                        <div class="table-actions">
-                            <div class="search-box">
-                                <i class="fa-solid fa-magnifying-glass"></i>
-                                <input type="text" id="log-search" placeholder="Search logs...">
-                            </div>
-                            <button id="btn-delete-selected" class="btn-danger btn-small" style="display: none;">
-                                <i class="fa-solid fa-trash-can"></i> Delete Selection
-                            </button>
-                        </div>
-
+                        <h3 id="accounts-heading">Accounts</h3>
                         <div class="table-responsive mt-3">
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th width="40"><input type="checkbox" id="check-all-logs"></th>
-                                        <th>Time</th>
-                                        <th>Model / Subscription</th>
-                                        <th>Description</th>
-                                        <th>Estimated Usage</th>
-                                        <th width="80">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="table-logs-body">
-                                    <!-- Dynamic rows -->
-                                </tbody>
+                            <table class="data-table accounts-table" aria-labelledby="accounts-heading">
+                                <thead><tr>
+                                    <th scope="col">Account</th>
+                                    <th scope="col">Session used</th>
+                                    <th scope="col" aria-sort="descending" title="Lowest remaining capacity across measured limits">Headroom</th>
+                                    <th scope="col">Week used</th>
+                                    <th scope="col">Next reset</th>
+                                    <th scope="col">Flags</th>
+                                </tr></thead>
+                                <tbody id="accounts-body"></tbody>
                             </table>
-                            <div id="table-empty-state" class="table-empty" style="display: none;">
-                                No log data found.
-                            </div>
                         </div>
                     </div>
+                    <details id="local-log" class="section-disclosure mt-4">
+                        <summary>Local log</summary>
+                        <!-- Quick Statistics Grid -->
+                        <div class="analytics-summary-grid mb-4">
+                            <div class="glass-panel summary-card border-claude">
+                                <span class="summary-label">Total Claude (7d)</span>
+                                <span class="summary-value" id="stats-total-claude">0 t</span>
+                                <span class="summary-subtext" id="stats-avg-claude">Avg. 0 t / day</span>
+                            </div>
+                            <div class="glass-panel summary-card border-chatgpt">
+                                <span class="summary-label">Total ChatGPT (7d)</span>
+                                <span class="summary-value" id="stats-total-chatgpt">0 m</span>
+                                <span class="summary-subtext" id="stats-avg-chatgpt">Avg. 0 / day</span>
+                            </div>
+                            <div class="glass-panel summary-card border-gemini">
+                                <span class="summary-label">Total Gemini (7d)</span>
+                                <span class="summary-value" id="stats-total-gemini">0 m</span>
+                                <span class="summary-subtext" id="stats-avg-gemini">Avg. 0 / day</span>
+                            </div>
+                            <div class="glass-panel summary-card border-zai">
+                                <span class="summary-label">Total Z.Ai (7d)</span>
+                                <span class="summary-value" id="stats-total-zai">0 m</span>
+                                <span class="summary-subtext" id="stats-avg-zai">Avg. 0 / day</span>
+                            </div>
+                            <div class="glass-panel summary-card border-accent">
+                                <span class="summary-label">Busiest Day (7d)</span>
+                                <span class="summary-value" id="stats-peak-day">-</span>
+                                <span class="summary-subtext" id="stats-peak-value">0 activities</span>
+                            </div>
+                        </div>
+
+                        <div class="glass-panel">
+                            <h3><i class="fa-solid fa-chart-line"></i> Usage Statistics</h3>
+                            <p class="section-desc">Messages recorded over the past week.</p>
+
+                            <div class="chart-container mt-4">
+                                <canvas id="usage-chart"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="glass-panel mt-4">
+                            <h3><i class="fa-solid fa-history"></i> Full Log History</h3>
+                            <div class="table-actions">
+                                <div class="search-box">
+                                    <i class="fa-solid fa-magnifying-glass"></i>
+                                    <input type="text" id="log-search" placeholder="Search logs...">
+                                </div>
+                                <button id="btn-delete-selected" class="btn-danger btn-small" style="display: none;">
+                                    <i class="fa-solid fa-trash-can"></i> Delete Selection
+                                </button>
+                            </div>
+
+                            <div class="table-responsive mt-3">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th width="40"><input type="checkbox" id="check-all-logs"></th>
+                                            <th>Time</th>
+                                            <th>Model / Subscription</th>
+                                            <th>Description</th>
+                                            <th>Estimated Usage</th>
+                                            <th width="80">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="table-logs-body">
+                                        <!-- Dynamic rows -->
+                                    </tbody>
+                                </table>
+                                <div id="table-empty-state" class="table-empty" style="display: none;">
+                                    No log data found.
+                                </div>
+                            </div>
+                        </div>
+                    </details>
                 </section>
 
                 <!-- 4. SETTINGS TAB -->
                 <section id="tab-settings" class="tab-pane">
+                    <nav class="settings-nav" aria-label="Settings sections">
+                        <a href="#settings-health">Health</a>
+                        <a href="#settings-tiles">Tiles</a>
+                        <a href="#settings-sync">Sync</a>
+                        <a href="#settings-data">Data</a>
+                    </nav>
                     <div class="settings-layout">
+                        <div id="settings-health" class="glass-panel">
+                            <h3>Health</h3>
+                            <ul id="health-sources" aria-label="Measuring sources"></ul>
+                        </div>
 
                         <!-- VISIBLE BLOCKS -->
-                        <div class="glass-panel">
+                        <div id="settings-tiles" class="glass-panel">
                             <h3><i class="fa-solid fa-table-cells-large"></i> Visible Blocks</h3>
-                            <p class="section-desc">Choose which subscription blocks appear on your dashboard. Hidden blocks are removed everywhere, including the combined view.</p>
+                            <p class="section-desc">Choose which tiles appear on your dashboard.</p>
                             <div id="visible-blocks-list" class="visible-blocks-list mt-3">
                                 <label class="block-toggle"><input type="checkbox" id="vb-claude" data-block="claude" checked> <span class="block-toggle-dot" style="background:var(--color-claude);"></span> Claude Pro</label>
                                 <label class="block-toggle"><input type="checkbox" id="vb-chatgpt" data-block="chatgpt" checked> <span class="block-toggle-dot" style="background:var(--color-chatgpt);"></span> ChatGPT (incl. monthly)</label>
@@ -764,242 +793,150 @@
                             </div>
                         </div>
 
-                        <!-- LIMITS MANAGEMENT -->
-                        <div class="glass-panel">
-                            <h3><i class="fa-solid fa-sliders"></i> Limit Settings</h3>
-                            <p class="section-desc">Adjust the limits to match the current guidelines of your subscriptions.</p>
+                        <div id="settings-sync">
+                            <!-- MOBILE SYNC PANEL -->
+                            <div class="glass-panel" id="settings-mobile-sync-panel">
+                                <h3><i class="fa-solid fa-mobile-screen-button"></i> Mobile Sync (PWA)</h3>
+                                <p class="section-desc">Pair your phone with this dashboard.</p>
 
-                            <form id="settings-limits-form" class="mt-3">
-                                <div class="settings-section-title">Claude Pro (Rolling Window)</div>
-                                <div class="form-grid">
-                                    <div class="form-group">
-                                        <label for="limit-claude-tokens">Max Tokens in Window</label>
-                                        <input type="number" id="limit-claude-tokens" value="200000" min="1000" step="5000">
+                                <div class="scraper-status-list mt-3">
+                                    <!-- Versies & apparaten: laat in één oogopslag zien of PC en telefoon
+                                         dezelfde versie draaien. Versiedrift was hiervoor onzichtbaar. -->
+                                    <div class="status-item-box" id="sync-devices-box" style="margin-bottom: 12px;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                                            <strong>Versions &amp; devices:</strong>
+                                            <span style="display: flex; gap: 6px;">
+                                                <button id="btn-refresh-devices" class="btn-small" style="padding: 2px 6px; font-size: 0.7rem;"><i class="fa-solid fa-arrows-rotate"></i> Check</button>
+                                                <button id="btn-github-update" class="btn-small" style="padding: 2px 6px; font-size: 0.7rem; display: none;"><i class="fa-brands fa-github"></i> Update</button>
+                                                <button id="btn-force-update" class="btn-small" style="padding: 2px 6px; font-size: 0.7rem;" title="Clear cache and load the latest version"><i class="fa-solid fa-download"></i> Force update</button>
+                                            </span>
+                                        </div>
+                                        <div id="sync-devices-list" style="margin-top: 8px; font-size: 0.75rem;">Loading…</div>
+                                        <div id="build-info-slot" style="margin-top: 8px; font-size: 0.7rem; font-family: monospace; color: rgba(255,255,255,0.45); letter-spacing: 0.3px;">Loading build info...</div>
                                     </div>
-                                    <div class="form-group">
-                                        <label for="limit-claude-hours">Window Duration (hours)</label>
-                                        <input type="number" id="limit-claude-hours" value="5" min="1" max="24">
-                                    </div>
-                                </div>
 
-                                <div class="settings-section-title mt-3">ChatGPT Business (Rolling Limit)</div>
-                                <div class="form-grid">
-                                    <div class="form-group">
-                                        <label for="limit-chatgpt-msg">Max Messages</label>
-                                        <input type="number" id="limit-chatgpt-msg" value="120" min="1">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="limit-chatgpt-hours">Window Duration (hours)</label>
-                                        <input type="number" id="limit-chatgpt-hours" value="3" min="1" max="24">
-                                    </div>
-                                </div>
+                                    <div class="status-item-box" id="sync-setup-box">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                            <strong>Status:</strong>
+                                            <span id="sync-connection-status" class="badge">Not Paired</span>
+                                        </div>
 
-                                <div class="settings-section-title mt-3">Gemini Advanced (Manual Buffer)</div>
-                                <div class="form-grid">
-                                    <div class="form-group">
-                                        <label for="limit-gemini-msg">Max Messages</label>
-                                        <input type="number" id="limit-gemini-msg" value="100" min="1">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="limit-gemini-hours">Window Duration (hours)</label>
-                                        <input type="number" id="limit-gemini-hours" value="24" min="1" max="168">
-                                    </div>
-                                </div>
+                                        <div id="sync-setup-actions">
+                                            <!-- My Profile Name -->
+                                            <div class="form-group" style="margin-bottom: 14px;">
+                                                <label for="sync-profile-label" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 6px;"><i class="fa-solid fa-id-badge" style="color: var(--color-gemini);"></i> My profile name</label>
+                                                <div style="display: flex; gap: 8px;">
+                                                    <input type="text" id="sync-profile-label" placeholder="e.g. Rob – Personal" style="font-size: 0.85rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; flex: 1; padding: 8px 10px; box-sizing: border-box;">
+                                                    <button type="button" id="btn-save-profile-label" class="btn-secondary" style="padding: 0 12px;" title="Save name">
+                                                        <i class="fa-solid fa-floppy-disk"></i>
+                                                    </button>
+                                                </div>
+                                                <p style="font-size: 0.68rem; color: var(--text-muted); margin-top: 4px;">Paired devices see this name.</p>
+                                            </div>
 
-                                <div class="settings-section-title mt-3">Z.Ai (Manual Buffer)</div>
-                                <div class="form-grid">
-                                    <div class="form-group">
-                                        <label for="limit-zai-msg">Max Messages</label>
-                                        <input type="number" id="limit-zai-msg" value="100" min="1">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="limit-zai-hours">Window Duration (hours)</label>
-                                        <input type="number" id="limit-zai-hours" value="24" min="1" max="168">
-                                    </div>
-                                </div>
+                                            <p class="desc mb-2" style="font-size: 0.78rem;">Create or join a sync.</p>
+                                            <div class="form-group" style="margin-bottom: 12px; text-align: left;">
+                                                <label for="sync-provider-select" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 6px;"><i class="fa-solid fa-bolt" style="color: var(--color-gemini);"></i> Connection</label>
+                                                <select id="sync-provider-select" style="font-size: 0.82rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; width: 100%; padding: 9px 10px; box-sizing: border-box;">
+                                                    <option value="npoint" selected>Default &middot; works everywhere (a bit slower)</option>
+                                                    <option value="firebase">Firebase &middot; faster realtime sync</option>
+                                                </select>
+                                                <p style="font-size: 0.68rem; color: var(--text-muted); margin-top: 4px; line-height: 1.4;">npoint needs no setup. Firebase updates faster.</p>
+                                            </div>
+                                            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                                                <button type="button" id="btn-generate-sync" class="btn-primary" style="flex: 1;">
+                                                    <i class="fa-solid fa-key"></i> Generate New Sync
+                                                </button>
+                                                <button type="button" id="btn-join-sync" class="btn-secondary" style="flex: 1;">
+                                                    <i class="fa-solid fa-link"></i> Join Existing
+                                                </button>
+                                            </div>
 
-                                <button type="submit" class="btn-primary mt-3">Save Limits</button>
-                            </form>
-                        </div>
+                                            <!-- Join panel (hidden by default) -->
+                                            <div id="join-sync-panel" style="display:none; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; margin-top: 8px;">
+                                                <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Paste the primary profile’s pairing URL.</p>
+                                                <input type="text" id="join-sync-url-input" placeholder="https://diederencustomsolutions.github.io/usage-dashboard/index.html?key=...&bin=..." style="font-size: 0.78rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; width: 100%; padding: 8px 10px; box-sizing: border-box; margin-bottom: 8px;">
+                                                <button type="button" id="btn-submit-join-sync" class="btn-primary w-100" style="font-size: 0.82rem; padding: 9px;">
+                                                    <i class="fa-solid fa-plug"></i> Connect to this sync
+                                                </button>
+                                            </div>
+                                        </div>
 
-                        <!-- EXTENSION STATUS -->
-                        <div class="glass-panel">
-                            <h3><i class="fa-solid fa-arrows-spin"></i> Scraper Connection Status</h3>
-                            <p class="section-desc">The dashboard pulls data from your open browser tabs.</p>
+                                        <div id="sync-active-info" style="display: none;">
+                                            <!-- My Profile Name (also visible when active — reuses same input ID) -->
+                                            <div class="form-group mb-3" id="active-profile-label-row">
+                                                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 6px;"><i class="fa-solid fa-id-badge" style="color: var(--color-gemini);"></i> My profile name</label>
+                                                <div style="display: flex; gap: 8px;">
+                                                    <input type="text" id="sync-profile-label-active" placeholder="e.g. Rob – Personal" style="font-size: 0.85rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; flex: 1; padding: 8px 10px; box-sizing: border-box;">
+                                                    <button type="button" id="btn-save-profile-label-active" class="btn-secondary" style="padding: 0 12px;" title="Save name">
+                                                        <i class="fa-solid fa-floppy-disk"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
 
-                            <div class="scraper-status-list mt-3">
-                                <div class="status-item-box">
-                                    <div class="label-row">
-                                        <strong>Claude Pro Scraper:</strong>
-                                        <span id="settings-status-claude" class="badge">Inactive</span>
-                                    </div>
-                                    <p class="desc">Open <a href="https://claude.ai/settings/usage" target="_blank">claude.ai/settings/usage</a> to update your remaining tokens.</p>
-                                </div>
+                                            <!-- Active profiles list -->
+                                            <div class="form-group mb-3">
+                                                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 8px;"><i class="fa-solid fa-users" style="color: var(--color-gemini);"></i> Active profiles on this sync</label>
+                                                <div id="sync-active-profiles">
+                                                    <p style="font-size:0.75rem; color:var(--text-muted);">Sync your data first to see profiles.</p>
+                                                </div>
+                                            </div>
 
-                                <div class="status-item-box mt-3">
-                                    <div class="label-row">
-                                        <strong>ChatGPT Business Scraper:</strong>
-                                        <span id="settings-status-chatgpt" class="badge">Inactive</span>
-                                    </div>
-                                    <p class="desc">Open <a href="https://chatgpt.com/settings/usage?tab=overview" target="_blank">chatgpt.com Settings → Usage</a> to read your limits.</p>
-                                </div>
+                                            <div class="form-group mb-2">
+                                                <label style="font-size: 0.75rem; color: var(--text-muted);">Your Unique Pairing Code (Secret):</label>
+                                                <div style="display: flex; gap: 8px;">
+                                                    <input type="text" id="sync-pairing-key" readonly style="font-family: monospace; font-size: 1.05rem; font-weight: bold; text-align: center; background: rgba(0,0,0,0.4); border: 1px solid var(--color-gemini); color: #fff; flex: 1; letter-spacing: 2px;" value="">
+                                                    <button type="button" id="btn-copy-pairing-key" class="btn-secondary" style="padding: 0 12px;" title="Copy Code">
+                                                        <i class="fa-solid fa-copy"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
 
-                                <div class="status-item-box mt-3">
-                                    <div class="label-row">
-                                        <strong>Z.Ai Usage API:</strong>
-                                        <span id="settings-status-zai" class="badge">Inactive</span>
-                                    </div>
-                                    <p class="desc">Open <a href="https://z.ai/manage-apikey/coding-plan/personal/usage" target="_blank">z.ai coding-plan usage</a> to scan the 5h token limit and reset time.</p>
-                                </div>
+                                            <div class="form-group mb-2">
+                                                <label style="font-size: 0.75rem; color: var(--text-muted);"><i class="fa-solid fa-server" style="color: var(--color-gemini);"></i> PWA host for your phone</label>
+                                                <div style="display: flex; gap: 8px;">
+                                                    <input type="text" id="sync-pwa-host" style="font-family: monospace; font-size: 0.78rem; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); color: #fff; flex: 1; padding: 6px 8px; border-radius: 6px;" placeholder="https://diederencustomsolutions.github.io/usage-dashboard">
+                                                    <button type="button" id="btn-save-pwa-host" class="btn-secondary" style="padding: 0 12px;" title="Save host">
+                                                        <i class="fa-solid fa-floppy-disk"></i>
+                                                    </button>
+                                                </div>
+                                                <p style="font-size: 0.68rem; color: var(--text-muted); margin-top: 4px; line-height: 1.4;">Private hosts require Tailscale on your phone.</p>
+                                            </div>
 
-                                <div class="status-item-box mt-3">
-                                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                                        <strong>Sync Log (Debug):</strong>
-                                        <button id="btn-clear-sync-logs" class="btn-small" style="padding: 2px 6px; font-size: 0.7rem;"><i class="fa-solid fa-eraser"></i> Clear</button>
-                                    </div>
-                                    <div id="sync-debug-logs" class="font-mono" style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 10px; font-size: 0.75rem; max-height: 180px; overflow-y: auto; color: #a0aec0; margin-top: 5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; user-select: text; -webkit-user-select: text;">
-                                        No log data available. Click sync or open a settings page to generate logs.
+                                            <p class="desc mb-2" style="font-size: 0.78rem;"><strong>How to install on your phone:</strong></p>
+                                            <ol class="desc" style="padding-left: 1.25rem; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px;">
+                                                <li>Scan the code or open the link.</li>
+                                                <li>Add the app to your home screen.</li>
+                                            </ol>
+
+                                            <!-- QR Code / Link container -->
+                                            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px; margin-top: 8px; gap: 8px; width: 100%;">
+                                                <div id="sync-qrcode" style="padding: 8px; background: white; border-radius: 4px; display: inline-block;">
+                                                    <!-- Dynamic QR Code will render here -->
+                                                </div>
+                                                <a id="sync-pwa-link" href="#" target="_blank" style="font-size: 0.72rem; color: var(--color-gemini); text-decoration: none; font-weight: bold; word-break: break-all; text-align: center; line-height: 1.4;">
+                                                    Open Live PWA Web App <i class="fa-solid fa-up-right-from-square"></i>
+                                                </a>
+                                            </div>
+
+                                            <button type="button" id="btn-disable-sync" class="btn-danger w-100 mt-3" style="padding: 0.45rem 1rem; font-size: 0.8rem;">
+                                                <i class="fa-solid fa-link-slash"></i> Disable Sync
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-
-                        <!-- MOBILE SYNC PANEL -->
-                        <div class="glass-panel" id="settings-mobile-sync-panel">
-                            <h3><i class="fa-solid fa-mobile-screen-button"></i> Mobile Sync (PWA)</h3>
-                            <p class="section-desc">Pair your mobile phone to view your dashboard live on the go.</p>
-
-                            <div class="scraper-status-list mt-3">
-                                <!-- Versies & apparaten: laat in één oogopslag zien of PC en telefoon
-                                     dezelfde versie draaien. Versiedrift was hiervoor onzichtbaar. -->
-                                <div class="status-item-box" id="sync-devices-box" style="margin-bottom: 12px;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                                        <strong>Versions &amp; devices:</strong>
-                                        <span style="display: flex; gap: 6px;">
-                                            <button id="btn-refresh-devices" class="btn-small" style="padding: 2px 6px; font-size: 0.7rem;"><i class="fa-solid fa-arrows-rotate"></i> Check</button>
-                                            <button id="btn-github-update" class="btn-small" style="padding: 2px 6px; font-size: 0.7rem; display: none;"><i class="fa-brands fa-github"></i> Update</button>
-                                            <button id="btn-force-update" class="btn-small" style="padding: 2px 6px; font-size: 0.7rem;" title="Throw away the cached app and fetch the newest version"><i class="fa-solid fa-download"></i> Force update</button>
-                                        </span>
-                                    </div>
-                                    <div id="sync-devices-list" style="margin-top: 8px; font-size: 0.75rem;">Loading…</div>
-                                    <div id="build-info-slot" style="margin-top: 8px; font-size: 0.7rem; font-family: monospace; color: rgba(255,255,255,0.45); letter-spacing: 0.3px;">Loading build info...</div>
-                                </div>
-
-                                <div class="status-item-box" id="sync-setup-box">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                        <strong>Status:</strong>
-                                        <span id="sync-connection-status" class="badge">Not Paired</span>
-                                    </div>
-
-                                    <div id="sync-setup-actions">
-                                        <!-- My Profile Name -->
-                                        <div class="form-group" style="margin-bottom: 14px;">
-                                            <label for="sync-profile-label" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 6px;"><i class="fa-solid fa-id-badge" style="color: var(--color-gemini);"></i> My profile name</label>
-                                            <div style="display: flex; gap: 8px;">
-                                                <input type="text" id="sync-profile-label" placeholder="e.g. Rob – Personal" style="font-size: 0.85rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; flex: 1; padding: 8px 10px; box-sizing: border-box;">
-                                                <button type="button" id="btn-save-profile-label" class="btn-secondary" style="padding: 0 12px;" title="Save name">
-                                                    <i class="fa-solid fa-floppy-disk"></i>
-                                                </button>
-                                            </div>
-                                            <p style="font-size: 0.68rem; color: var(--text-muted); margin-top: 4px;">This name is visible to all devices on the shared sync.</p>
-                                        </div>
-
-                                        <p class="desc mb-2" style="font-size: 0.78rem;">Generate a new sync or join an existing one:</p>
-                                        <div class="form-group" style="margin-bottom: 12px; text-align: left;">
-                                            <label for="sync-provider-select" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 6px;"><i class="fa-solid fa-bolt" style="color: var(--color-gemini);"></i> Connection</label>
-                                            <select id="sync-provider-select" style="font-size: 0.82rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; width: 100%; padding: 9px 10px; box-sizing: border-box;">
-                                                <option value="npoint" selected>Default &middot; works everywhere (a bit slower)</option>
-                                                <option value="firebase">Firebase &middot; faster realtime sync</option>
-                                            </select>
-                                            <p style="font-size: 0.68rem; color: var(--text-muted); margin-top: 4px; line-height: 1.4;">npoint works everywhere without setup. Firebase is faster and more reliable.</p>
-                                        </div>
-                                        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-                                            <button type="button" id="btn-generate-sync" class="btn-primary" style="flex: 1;">
-                                                <i class="fa-solid fa-key"></i> Generate New Sync
-                                            </button>
-                                            <button type="button" id="btn-join-sync" class="btn-secondary" style="flex: 1;">
-                                                <i class="fa-solid fa-link"></i> Join Existing
-                                            </button>
-                                        </div>
-
-                                        <!-- Join panel (hidden by default) -->
-                                        <div id="join-sync-panel" style="display:none; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; margin-top: 8px;">
-                                            <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">Paste the pairing URL from the primary Chrome profile:</p>
-                                            <input type="text" id="join-sync-url-input" placeholder="https://diederencustomsolutions.github.io/usage-dashboard/index.html?key=...&bin=..." style="font-size: 0.78rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; width: 100%; padding: 8px 10px; box-sizing: border-box; margin-bottom: 8px;">
-                                            <button type="button" id="btn-submit-join-sync" class="btn-primary w-100" style="font-size: 0.82rem; padding: 9px;">
-                                                <i class="fa-solid fa-plug"></i> Connect to this sync
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <div id="sync-active-info" style="display: none;">
-                                        <!-- My Profile Name (also visible when active — reuses same input ID) -->
-                                        <div class="form-group mb-3" id="active-profile-label-row">
-                                            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 6px;"><i class="fa-solid fa-id-badge" style="color: var(--color-gemini);"></i> My profile name</label>
-                                            <div style="display: flex; gap: 8px;">
-                                                <input type="text" id="sync-profile-label-active" placeholder="e.g. Rob – Personal" style="font-size: 0.85rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; flex: 1; padding: 8px 10px; box-sizing: border-box;">
-                                                <button type="button" id="btn-save-profile-label-active" class="btn-secondary" style="padding: 0 12px;" title="Save name">
-                                                    <i class="fa-solid fa-floppy-disk"></i>
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                        <!-- Active profiles list -->
-                                        <div class="form-group mb-3">
-                                            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 8px;"><i class="fa-solid fa-users" style="color: var(--color-gemini);"></i> Active profiles on this sync</label>
-                                            <div id="sync-active-profiles">
-                                                <p style="font-size:0.75rem; color:var(--text-muted);">Sync your data first to see profiles.</p>
-                                            </div>
-                                        </div>
-
-                                        <div class="form-group mb-2">
-                                            <label style="font-size: 0.75rem; color: var(--text-muted);">Your Unique Pairing Code (Secret):</label>
-                                            <div style="display: flex; gap: 8px;">
-                                                <input type="text" id="sync-pairing-key" readonly style="font-family: monospace; font-size: 1.05rem; font-weight: bold; text-align: center; background: rgba(0,0,0,0.4); border: 1px solid var(--color-gemini); color: #fff; flex: 1; letter-spacing: 2px;" value="">
-                                                <button type="button" id="btn-copy-pairing-key" class="btn-secondary" style="padding: 0 12px;" title="Copy Code">
-                                                    <i class="fa-solid fa-copy"></i>
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                        <div class="form-group mb-2">
-                                            <label style="font-size: 0.75rem; color: var(--text-muted);"><i class="fa-solid fa-server" style="color: var(--color-gemini);"></i> PWA host (where the phone loads the app):</label>
-                                            <div style="display: flex; gap: 8px;">
-                                                <input type="text" id="sync-pwa-host" style="font-family: monospace; font-size: 0.78rem; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); color: #fff; flex: 1; padding: 6px 8px; border-radius: 6px;" placeholder="https://diederencustomsolutions.github.io/usage-dashboard">
-                                                <button type="button" id="btn-save-pwa-host" class="btn-secondary" style="padding: 0 12px;" title="Save host">
-                                                    <i class="fa-solid fa-floppy-disk"></i>
-                                                </button>
-                                            </div>
-                                            <p style="font-size: 0.68rem; color: var(--text-muted); margin-top: 4px; line-height: 1.4;">Default: public GitHub Pages (works on any phone). Your own Tailscale host is also possible — fully private but requires Tailscale on the phone.</p>
-                                        </div>
-
-                                        <p class="desc mb-2" style="font-size: 0.78rem;"><strong>How to install on your phone:</strong></p>
-                                        <ol class="desc" style="padding-left: 1.25rem; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px;">
-                                            <li>Scan the QR code or tap the link below on your phone.</li>
-                                            <li>Add the page to your home screen (install as a PWA).</li>
-                                            <li>Your data now syncs live and securely!</li>
-                                        </ol>
-
-                                        <!-- QR Code / Link container -->
-                                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px; margin-top: 8px; gap: 8px; width: 100%;">
-                                            <div id="sync-qrcode" style="padding: 8px; background: white; border-radius: 4px; display: inline-block;">
-                                                <!-- Dynamic QR Code will render here -->
-                                            </div>
-                                            <a id="sync-pwa-link" href="#" target="_blank" style="font-size: 0.72rem; color: var(--color-gemini); text-decoration: none; font-weight: bold; word-break: break-all; text-align: center; line-height: 1.4;">
-                                                Open Live PWA Web App <i class="fa-solid fa-up-right-from-square"></i>
-                                            </a>
-                                        </div>
-
-                                        <button type="button" id="btn-disable-sync" class="btn-danger w-100 mt-3" style="padding: 0.45rem 1rem; font-size: 0.8rem;">
-                                            <i class="fa-solid fa-link-slash"></i> Disable Sync
-                                        </button>
-                                    </div>
-                                </div>
+                            <div id="settings-client-sync" class="glass-panel" hidden>
+                                <h3>Cloud sync</h3>
+                                <div id="settings-mobile-sync-desc" class="section-desc"></div>
+                                <button type="button" id="btn-mobile-refresh" class="btn-secondary mt-3">
+                                    <i class="fa-solid fa-arrows-rotate"></i> Refresh now
+                                </button>
                             </div>
                         </div>
 
                         <!-- DATA ACTIONS -->
-                        <div class="glass-panel">
+                        <div id="settings-data" class="glass-panel">
                             <h3><i class="fa-solid fa-database"></i> Data Management</h3>
                             <p class="section-desc">Export or clear your usage history.</p>
 
@@ -1019,6 +956,109 @@
                                     <i class="fa-solid fa-trash-can"></i> Clear All Data
                                 </button>
                             </div>
+
+                            <details class="section-disclosure mt-4">
+                                <summary>Advanced</summary>
+                                <!-- LIMITS MANAGEMENT -->
+                                <div class="glass-panel">
+                                    <h3><i class="fa-solid fa-sliders"></i> Limit Settings</h3>
+                                    <p class="section-desc">Adjust limits for each subscription.</p>
+
+                                    <form id="settings-limits-form" class="mt-3">
+                                        <div class="settings-section-title">Claude Pro (Rolling Window)</div>
+                                        <div class="form-grid">
+                                            <div class="form-group">
+                                                <label for="limit-claude-tokens">Max Tokens in Window</label>
+                                                <input type="number" id="limit-claude-tokens" value="200000" min="1000" step="5000">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="limit-claude-hours">Window Duration (hours)</label>
+                                                <input type="number" id="limit-claude-hours" value="5" min="1" max="24">
+                                            </div>
+                                        </div>
+
+                                        <div class="settings-section-title mt-3">ChatGPT Business (Rolling Limit)</div>
+                                        <div class="form-grid">
+                                            <div class="form-group">
+                                                <label for="limit-chatgpt-msg">Max Messages</label>
+                                                <input type="number" id="limit-chatgpt-msg" value="120" min="1">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="limit-chatgpt-hours">Window Duration (hours)</label>
+                                                <input type="number" id="limit-chatgpt-hours" value="3" min="1" max="24">
+                                            </div>
+                                        </div>
+
+                                        <div class="settings-section-title mt-3">Gemini Advanced (Manual Buffer)</div>
+                                        <div class="form-grid">
+                                            <div class="form-group">
+                                                <label for="limit-gemini-msg">Max Messages</label>
+                                                <input type="number" id="limit-gemini-msg" value="100" min="1">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="limit-gemini-hours">Window Duration (hours)</label>
+                                                <input type="number" id="limit-gemini-hours" value="24" min="1" max="168">
+                                            </div>
+                                        </div>
+
+                                        <div class="settings-section-title mt-3">Z.Ai (Manual Buffer)</div>
+                                        <div class="form-grid">
+                                            <div class="form-group">
+                                                <label for="limit-zai-msg">Max Messages</label>
+                                                <input type="number" id="limit-zai-msg" value="100" min="1">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="limit-zai-hours">Window Duration (hours)</label>
+                                                <input type="number" id="limit-zai-hours" value="24" min="1" max="168">
+                                            </div>
+                                        </div>
+
+                                        <button type="submit" class="btn-primary mt-3">Save Limits</button>
+                                    </form>
+                                </div>
+
+                                <!-- EXTENSION STATUS -->
+                                <div id="settings-scraper" class="glass-panel">
+                                    <h3><i class="fa-solid fa-arrows-spin"></i> Scraper Connection Status</h3>
+                                    <p class="section-desc">Read usage from open browser tabs.</p>
+
+                                    <div class="scraper-status-list mt-3">
+                                        <div class="status-item-box">
+                                            <div class="label-row">
+                                                <strong>Claude Pro Scraper:</strong>
+                                                <span id="settings-status-claude" class="badge">Inactive</span>
+                                            </div>
+                                            <p class="desc">Open <a href="https://claude.ai/settings/usage" target="_blank">claude.ai/settings/usage</a> to update your remaining tokens.</p>
+                                        </div>
+
+                                        <div class="status-item-box mt-3">
+                                            <div class="label-row">
+                                                <strong>ChatGPT Business Scraper:</strong>
+                                                <span id="settings-status-chatgpt" class="badge">Inactive</span>
+                                            </div>
+                                            <p class="desc">Open <a href="https://chatgpt.com/settings/usage?tab=overview" target="_blank">chatgpt.com Settings → Usage</a> to read limits.</p>
+                                        </div>
+
+                                        <div class="status-item-box mt-3">
+                                            <div class="label-row">
+                                                <strong>Z.Ai Usage API:</strong>
+                                                <span id="settings-status-zai" class="badge">Inactive</span>
+                                            </div>
+                                            <p class="desc">Open <a href="https://z.ai/manage-apikey/coding-plan/personal/usage" target="_blank">z.ai coding-plan usage</a> for five-hour limits.</p>
+                                        </div>
+
+                                        <div class="status-item-box mt-3">
+                                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                                <strong>Sync Log (Debug):</strong>
+                                                <button id="btn-clear-sync-logs" class="btn-small" style="padding: 2px 6px; font-size: 0.7rem;"><i class="fa-solid fa-eraser"></i> Clear</button>
+                                            </div>
+                                            <div id="sync-debug-logs" class="font-mono" style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 10px; font-size: 0.75rem; max-height: 180px; overflow-y: auto; color: #a0aec0; margin-top: 5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; user-select: text; -webkit-user-select: text;">
+                                                No sync entries yet.
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
                         </div>
                     </div>
                 </section>
@@ -1172,6 +1212,6 @@
     </div>
 
     <!-- Script Entry -->
-    <script src="app.js?v=0.42.2"></script>
+    <script src="app.js?v=0.43.0"></script>
 </body>
 </html>

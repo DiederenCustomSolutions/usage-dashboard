@@ -29,6 +29,84 @@ const run = code=>vm.runInContext(code,context);
 let checks = 0;
 function check(labelText,code) {assert.equal(run(code),true,labelText);checks++;}
 
+function checkAccountsAndHealth() {
+    const now = Date.parse('2026-11-18T12:00:00Z');
+    const minute = 60000;
+    const elements = Object.fromEntries([
+        'accounts-body', 'health-sources', 'settings-mobile-sync-panel', 'settings-scraper',
+        'settings-client-sync', 'sync-devices-box', 'btn-clear-all', 'btn-trigger-import'
+    ].map(id => [id, {style: {}}]));
+    const limitControls = [{disabled: false}, {disabled: false}];
+    elements['settings-limits-form'] = {querySelectorAll: () => limitControls};
+    elements['settings-client-sync'].appendChild = function (child) { child.parentElement = this; };
+    const sandbox = vm.createContext({
+        Date: class extends Date { static now() { return now; } },
+        setInterval() {}, // Do not start the dashboard's existing background work.
+        document: {
+            addEventListener() {}, querySelector: () => null, cookie: '',
+            getElementById: id => elements[id]
+        },
+        localStorage: {getItem: () => null}
+    });
+    vm.runInContext(source, sandbox);
+    const state = vm.runInContext('state', sandbox);
+    state.myProfileId = 'A';
+    state.myProfileLabel = 'Office';
+    state.selectedProfileId = 'A';
+    state.syncStatus = {claude: {
+        pctRemaining: 90, pctRemainingWeekly: 12, resetSessionAbsoluteTs: now + 130 * minute,
+        resetWeeklyAbsoluteTs: now + 3 * 86400000, lastSynced: now - 31 * minute
+    }};
+    state.cloudProfiles = {
+        A: {lastSeen: now - 9 * minute, lastError: {provider: 'claude', message: 'Check if logged in'}},
+        B: {label: '<Laptop>', lastSeen: now - 10 * minute, appVersion: '0.9.0', syncStatus: {
+            chatgpt: {pctRemainingWeekly: 60, lastSynced: now - 30 * minute}
+        }},
+        C: {label: 'Home', lastSeen: now - 60 * minute, syncStatus: {
+            codex: {pctRemainingMonthly: 75, resetMonthlyAbsoluteTs: now + minute, lastSynced: now}
+        }}
+    };
+    state.cloudClients = {old: {label: 'Old phone', appVersion: '0.39.1'}, current: {label: 'New phone', appVersion: sandbox.runningVersion()}};
+    sandbox.renderAccounts();
+    const rows = elements['accounts-body'].innerHTML.match(/<tr>[\s\S]*?<\/tr>/g);
+    assert.equal(rows.length, 3, 'Includes other profiles regardless of selection');
+    assert.match(rows[0], /Home · ChatGPT.*Month used 25%[\s\S]*in 1m[\s\S]*Best/);
+    assert.match(rows[1], /&lt;Laptop&gt; · ChatGPT[\s\S]*<td>—<\/td>[\s\S]*<td>40%<\/td>/);
+    assert.doesNotMatch(rows[1], /Stale|Best|Logged out/);
+    assert.match(rows[2], /Office · Claude Pro[\s\S]*<td>10%<\/td>[\s\S]*<td>88%<\/td><td>in 2h 10m/);
+    assert.match(rows[2], /Ahead of pace.*Stale 31m.*Logged out\?/);
+    checks += 6;
+
+    sandbox.renderHealth();
+    const health = elements['health-sources'].innerHTML;
+    assert.match(health, /Office<\/strong><span class="health-age recent">9m ago<\/span>.*?Logged out\?/);
+    assert.match(health, /&lt;Laptop&gt;<\/strong><span class="health-age away">10m ago<\/span>.*?Old version · v0.9.0/);
+    assert.match(health, /Home<\/strong><span class="health-age offline">1h 0m ago/);
+    assert.match(health, /Old phone/);
+    assert.doesNotMatch(health, /New phone/);
+    checks += 5;
+
+    sandbox.localStorage.getItem = () => '{"enabled":true}';
+    state.syncStatus = {zai: {pctRemaining5h: 100}}; // A viewer has aggregate data, too.
+    sandbox.renderAccounts();
+    assert.doesNotMatch(elements['accounts-body'].innerHTML, /Z\.Ai/);
+    state.cloudProfiles = {};
+    sandbox.renderAccounts();
+    assert.match(elements['accounts-body'].innerHTML, /Measuring source · Z\.Ai/);
+    state.syncStatus = {};
+    sandbox.renderAccounts();
+    assert.match(elements['accounts-body'].innerHTML, /No account measurements yet/);
+    sandbox.applyMobileSyncUI();
+    assert.equal(elements['settings-mobile-sync-panel'].style.display, 'none');
+    assert.equal(elements['settings-scraper'].hidden, true);
+    assert.equal(elements['settings-client-sync'].hidden, false);
+    assert.equal(elements['sync-devices-box'].parentElement, elements['settings-client-sync']);
+    assert.equal(elements['btn-trigger-import'].disabled, true);
+    assert.equal(elements['btn-clear-all'].disabled, true);
+    assert.ok(limitControls.every(input => input.disabled));
+    checks += 10;
+}
+
 async function checkMonthlyReset() {
     const previousTZ = process.env.TZ;
     const now = Date.parse('2026-10-25T00:00:00Z');
@@ -435,6 +513,7 @@ async function main() {
     await checkCodexLogSync();
     checkCodexLogDashboard();
     await checkMonthlyReset();
+    checkAccountsAndHealth();
     console.log('Usage state: '+checks+' offline checks passed.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1});

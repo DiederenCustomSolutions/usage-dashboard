@@ -1563,12 +1563,85 @@ body.auth-view .app-container {
    ========================================================================== */
 .settings-layout {
     display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 1.5rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
 }
 
-.settings-layout .glass-panel:first-child {
-    grid-row: span 2;
+.settings-layout .glass-panel, #tab-analytics > .glass-panel,
+#local-log > .glass-panel:not(.summary-card) {
+    padding: clamp(0.85rem, 2vw, 1.5rem);
+}
+
+.settings-nav {
+    display: inline-flex;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+    padding: 0.25rem;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--card-bg);
+}
+
+.settings-nav a, .section-disclosure > summary {
+    padding: 0.6rem 0.9rem;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--text-main);
+    cursor: pointer;
+}
+
+.settings-nav a { text-decoration: none; }
+.settings-nav a:hover, .section-disclosure > summary:hover { background: rgba(255,255,255,0.06); }
+.settings-layout > [id] { scroll-margin-top: 1rem; }
+.section-disclosure > summary { background: var(--card-bg); border: 1px solid var(--border-color); }
+.section-disclosure[open] > summary, #settings-data details > .glass-panel { margin-bottom: 0.75rem; }
+
+.accounts-table td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.accounts-table th[scope="row"] { min-width: 9rem; background: transparent; color: var(--text-main); overflow-wrap: anywhere; }
+.accounts-table small { display: block; color: var(--text-muted); }
+.accounts-table progress { width: 3rem; height: 0.45rem; vertical-align: middle; accent-color: var(--color-chatgpt); }
+.accounts-table td:last-child { white-space: normal; }
+.account-flag {
+    display: inline-block;
+    white-space: nowrap;
+    margin-block: 0.12rem;
+    padding: 0.16rem 0.5rem;
+    border-radius: 1rem;
+    font-size: 0.75rem;
+    background: rgba(245,158,11,0.1);
+    color: var(--accent-yellow);
+}
+.account-flag.best { color: var(--accent-green); background: rgba(16,185,129,0.12); }
+#health-sources { list-style: none; margin-top: 0.6rem; }
+#health-sources li {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.85rem;
+    padding: 0.55rem 0;
+    font-size: 0.85rem;
+    overflow-wrap: anywhere;
+}
+#health-sources li + li { border-top: 1px solid var(--border-color); }
+.health-age { color: var(--text-muted); }
+.health-age::before {
+    content: "";
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-right: 0.4rem;
+    border-radius: 50%;
+    background: var(--accent-red);
+}
+.health-age.recent::before { background: var(--accent-green); }
+.health-age.away::before { background: var(--accent-yellow); }
+#settings-client-sync #sync-devices-box { margin-top: 1rem; }
+#sync-devices-box > div:first-child, #sync-devices-box > div:first-child > span { flex-wrap: wrap; gap: 0.4rem; }
+
+@media (max-width: 600px) {
+    #settings-data .form-grid { grid-template-columns: minmax(0, 1fr); }
+    .accounts-table th, .accounts-table td { padding: 0.65rem; }
 }
 
 .settings-section-title {
@@ -2006,12 +2079,8 @@ body.auth-view .app-container {
         grid-template-columns: 1fr;
     }
     
-    .dashboard-secondary-grid, .settings-layout {
+    .dashboard-secondary-grid {
         grid-template-columns: 1fr;
-    }
-    
-    .settings-layout .glass-panel:first-child {
-        grid-row: auto;
     }
 }
 

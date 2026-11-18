@@ -4,6 +4,13 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.43.0] — 2026-11-18
+
+- Analyze: accounts table across all profiles, sorted by headroom, with Best, Ahead of pace, Stale and Logged out flags.
+- Analyze: the old local log is folded under "Local log".
+- Settings: Health first (last seen per source, logged-out hint, devices behind), then Tiles, Sync and Data.
+- Settings: legacy limits, scraper status and sync log moved under Data → Advanced.
+
 ## [0.42.2] — 2026-11-18
 
 - Reset line moves inside the 5h ring and the week donut.
