@@ -4500,8 +4500,8 @@ function renderProfileBar() {
    MULTI-PROFILE GRID — één card per (profiel × abonnement) in de "All"-weergave
    ========================================================================== */
 const PROVIDER_META = {
-    claude:  { name: "Claude Pro",      meta: "Anthropic",  icon: "fa-compass-drafting",    cls: "claude" },
-    chatgpt: { name: "ChatGPT",         meta: "OpenAI",     icon: "fa-robot",               cls: "chatgpt" },
+    claude:  { name: "Claude Pro",      meta: "Anthropic",  icon: "fa-compass-drafting",    cls: "claude", img: "assets/claude-mark.svg" },
+    chatgpt: { name: "ChatGPT",         meta: "OpenAI",     icon: "fa-robot",               cls: "chatgpt", img: "assets/openai-mark.svg" },
     gemini:  { name: "Gemini Advanced", meta: "Google",     icon: "fa-wand-magic-sparkles", cls: "gemini" },
     zai:     { name: "Z.Ai",            meta: "GLM",        icon: "fa-brain",               cls: "zai" }
 };
@@ -4944,7 +4944,7 @@ function buildSnapshotCard(provider, profile) {
         </button>
         <div class="provider-header">
             <div class="provider-title">
-                <div class="brand-icon-wrapper ${meta.cls}"><i class="fa-solid ${meta.icon}"></i></div>
+                <div class="brand-icon-wrapper ${meta.cls}">${meta.img ? `<img src="${meta.img}" class="brand-mark" alt="">` : `<i class="fa-solid ${meta.icon}"></i>`}</div>
                 <div>
                     <h3>${meta.name}</h3>
                     <span class="provider-meta">

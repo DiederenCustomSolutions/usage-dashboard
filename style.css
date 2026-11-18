@@ -504,16 +504,16 @@ body.auth-view .app-container {
 
 .sync-shortcut-icon.claude {
     background: transparent;
-    border-color: rgba(0, 242, 254, 0.48);
+    border-color: rgba(217, 119, 87, 0.5);
     box-shadow:
-        0 0 12px rgba(0, 242, 254, 0.28),
+        0 0 12px rgba(217, 119, 87, 0.25),
         inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .sync-shortcut-icon.claude:hover {
-    border-color: #00f2fe;
+    border-color: #d97757;
     box-shadow:
-        0 0 16px rgba(0, 242, 254, 0.46),
+        0 0 16px rgba(217, 119, 87, 0.45),
         inset 0 1px 0 rgba(255, 255, 255, 0.24);
     transform: translateY(-1px);
 }
@@ -931,6 +931,12 @@ body.auth-view .app-container {
     align-items: center;
     justify-content: center;
     font-size: 1.4rem;
+}
+
+.brand-icon-wrapper .brand-mark {
+    width: 22px;
+    height: 22px;
+    display: block;
 }
 
 .brand-icon-wrapper.claude {

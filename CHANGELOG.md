@@ -10,6 +10,7 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 - Calmer header: a green dot when synced; the version chip only shows when PCs are behind or an update waits; no "Data synced" bar (the toast says it).
 - Reports and Help placeholders removed from the tabs.
 - Phone: tabs move to a bottom bar.
+- Real Claude and OpenAI marks in the header and on the tiles (simple-icons, CC0).
 
 ---
 

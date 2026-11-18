@@ -20,6 +20,8 @@ const ASSETS = [
   './assets/usage-dashboard-logo.svg',
   './assets/openai-badge.svg',
   './assets/anthropic-ai-badge.svg',
+  './assets/claude-mark.svg',
+  './assets/openai-mark.svg',
   './assets/profile-avatar.svg'
 ];
 
