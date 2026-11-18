@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.40.2";
+const APP_VERSION = "0.40.3";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5324,7 +5324,7 @@ function usageRowsFromProfiles() {
                 ...(usagePlannerAccounts.get(profile.label) || { who: profile.label }),
                 segments: daily ? usageModelTotals(last ? [last] : []) : totals,
                 period: daily ? (last ? usageDateFormat.format(Date.parse(last.date)) : "last day") : "7 days",
-                week, totals, hasLog, hours: log?.hours, units: gpt?.units || "",
+                week, totals, hasLog, hours: log?.hours, hoursAt: log?.checkedAt, units: gpt?.units || "",
                 // OpenAI's report can stop updating (16-11-2026: frozen for days); say so instead of looking idle.
                 stale: last && checkedAt - Date.parse(last.date) - 86400000 > 24 * 3600000
                     ? "No model data after " + usageDateFormat.format(Date.parse(last.date)) : ""
@@ -5401,12 +5401,23 @@ function usageTokens(value) {
     return usageTokenFormat.format(value).toUpperCase() + " tok";
 }
 
-function renderUsageHours(chart, hours, date) {
+function usageLocalHour(instant, timeZone) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+        timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23"
+    }).formatToParts(instant).map(p => [p.type, p.value]));
+    return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
+}
+
+function renderUsageHours(chart, hours, date, measuredAt) {
     chart.replaceChildren();
     chart.hidden = !date;
     if (!date) return;
     const buckets = usageHoursForDate(hours, date);
-    const peak = Math.max(...buckets.map(models => [...models.values()].reduce((a, b) => a + b, 0)));
+    // Hours after the last measurement are unknown, not idle: mark the measured hour and fade the rest.
+    const measured = Number.isFinite(measuredAt) && Array.isArray(hours) ? usageLocalHour(measuredAt) : null;
+    const lastKnown = !measured || date < measured.date ? 24 : date > measured.date ? -1
+        : Math.max(measured.hour, ...buckets.map((models, hour) => models.size ? hour : -1));
+    const peak = Math.max(...buckets.map(models => [...models.values()].reduce((a, b) => a + b, 0))) || (lastKnown < 24 ? 1 : 0);
     if (!peak) {
         chart.textContent = "No hourly data";
         return;
@@ -5417,8 +5428,10 @@ function renderUsageHours(chart, hours, date) {
         const column = document.createElement("div");
         const bar = document.createElement("div");
         bar.className = "um-hour-bar";
+        if (hour === lastKnown) column.className = "um-hour-now";
+        else if (hour > lastKnown) column.className = "um-hour-later";
         const when = String(hour).padStart(2, "0") + ":00";
-        bar.title = when + " · " + appendUsageSegments(bar, models, peak, usageTokens, when);
+        bar.title = when + " · " + (hour > lastKnown ? "Not measured yet" : appendUsageSegments(bar, models, peak, usageTokens, when));
         bar.setAttribute("role", "img");
         bar.setAttribute("aria-label", bar.title);
         column.append(bar);
@@ -5452,7 +5465,7 @@ function renderUsageDetails(panel, item) {
     const buttons = new Map();
     const showDate = date => {
         buttons.forEach((button, key) => button.setAttribute("aria-pressed", String(key === date)));
-        renderUsageHours(hourly, item.hours, date);
+        renderUsageHours(hourly, item.hours, date, item.hoursAt);
     };
     const peak = item.hasLog ? 0 : Math.max(0, ...item.week.map(day => day.total));
     item.week.forEach(day => {
@@ -5466,8 +5479,11 @@ function renderUsageDetails(panel, item) {
         bar.setAttribute("aria-label", bar.title);
         bar.setAttribute("aria-controls", hourly.id);
         buttons.set(day.date, bar);
-        bar.addEventListener("click", () => {
-            selectedUsageDate = bar.getAttribute("aria-pressed") === "true" ? null : day.date;
+        bar.addEventListener("click", event => {
+            // Picking another block in the open day keeps it open; only a repeat click closes it.
+            const segment = event?.target?.closest?.("[data-tip]");
+            const repeat = bar.getAttribute("aria-pressed") === "true" && (!segment || segment.classList.contains("um-picked"));
+            selectedUsageDate = repeat ? null : day.date;
             showDate(selectedUsageDate);
         });
         column.append(bar, date);
@@ -5488,8 +5504,11 @@ function renderUsageDetails(panel, item) {
                 segment.classList.add("um-picked");
             }
         }
-        else if (event.type === "pointerover") tip.textContent = "";
+        else if (event.type === "pointerover") restoreTip();
     };
+    // Leaving a block shows the picked block again, so its text stays.
+    const restoreTip = () => { tip.textContent = panel.querySelector(".um-picked")?.getAttribute("data-tip") || ""; };
+    panel.addEventListener("pointerleave", restoreTip);
     panel.addEventListener("pointerover", showTip);
     panel.addEventListener("click", showTip);
     panel.append(chart, hourly, tip);

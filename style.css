@@ -3021,13 +3021,15 @@ body.auth-view .app-container {
 .um-week {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;max-width:480px;margin-bottom:12px;color:var(--um-muted);text-align:center;font-size:11px}
 .um-day-bar,.um-hour-bar {display:flex;flex-direction:column-reverse;width:100%;height:58px;background:var(--um-line);border-radius:4px;overflow:hidden;margin-bottom:3px}
 .um-day-bar {appearance:none;padding:0;border:0;cursor:pointer}
-.um-day-bar[aria-pressed="true"] {outline:2px solid var(--um-fg);outline-offset:2px}
+.um-day-bar[aria-pressed="true"] {outline:1.5px dashed var(--um-fg);outline-offset:2px}
 .um-day-bar:focus-visible {outline:2px solid var(--um-fg);outline-offset:2px}
 .um-day-bar > span + span,.um-hour-bar > span + span {box-shadow:inset 0 -1px 0 rgba(0,0,0,.45)}
 .um-hour-detail {max-width:480px;margin-bottom:12px;color:var(--um-muted)}
 .um-hours {display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:2px;font-size:11px;text-align:center}
 .um-hour-tick {display:block;margin-top:1px;padding-top:2px;border-top:1px solid var(--um-line2);color:var(--um-fg);opacity:.8;white-space:nowrap;font-variant-numeric:tabular-nums}
 .um-day-bar > span.um-picked,.um-hour-bar > span.um-picked {box-shadow:inset 0 0 0 1.5px #fff;border-radius:2px}
+.um-hour-now .um-hour-bar {box-shadow:inset 0 2px 0 var(--um-fg)}
+.um-hour-later .um-hour-bar {background:transparent;box-shadow:inset 0 0 0 1px var(--um-line)}
 .um-hour-bar {height:42px;border-radius:2px}
 .um-tip {min-height:1.4em;margin:-6px 0 8px;color:var(--um-fg);font-size:12px;font-variant-numeric:tabular-nums}
 .um-day-bar > span:hover,.um-hour-bar > span:hover {filter:brightness(1.25)}
