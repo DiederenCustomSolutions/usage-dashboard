@@ -282,6 +282,10 @@ function checkCodexLogDashboard() {
     assert.equal(bars.length, 24);
     assert.equal(bars[14].title, '14:00 · Astra 6.2 1.2M tok, Sol 6.1 300K tok');
     assert.deepEqual(bars[14].children.map(span => span.style.height), ['80%', '20%']);
+    assert.equal(hourly.children[0].children[14].className, 'um-hour-now'); // Last hour with data or measured.
+    assert.equal(bars[15].title, '15:00 · Not measured yet');
+    assert.equal(hourly.children[0].children[15].className, 'um-hour-later');
+    assert.equal(hourly.children[0].children[13].className || '', '');
     dayButtons[5].click();
     assert.equal(dayButtons[6].getAttribute('aria-pressed'), 'false');
     assert.equal(dayButtons[5].getAttribute('aria-pressed'), 'true');
