@@ -4966,6 +4966,14 @@ function buildSnapshotCard(provider, profile) {
     else if (provider === "gemini")  pct = sync.limitReached ? 0 : 100;
     else if (provider === "zai")     pct = sync.pctRemaining5h ?? sync.pctRemaining;
 
+    // Only a week limit (no 5h, no month): the big ring shows the week, no extra donut.
+    const paceSections = computeProviderPace(provider, sync, now, monthlySync);
+    const hasVal = s => !!s && s.capPct !== undefined && s.capPct !== null;
+    const fiveSec = paceSections.find(s => /^(5 Hour|Current Session)/.test(s.title) && hasVal(s));
+    const weekSec = paceSections.find(s => /^Weekly/.test(s.title) && hasVal(s));
+    const monthSec = paceSections.find(s => /^Monthly/.test(s.title) && hasVal(s));
+    const weekOnly = !fiveSec && !monthSec && !!weekSec;
+    if (weekOnly) pct = weekSec.capPct;
     const pctNum = (pct === undefined || pct === null) ? 100 : Math.max(0, Math.min(100, pct));
     // The ring and centre show what is used; the pace bars below keep "remaining".
     const usedNum = 100 - pctNum;
@@ -4982,19 +4990,18 @@ function buildSnapshotCard(provider, profile) {
         ? `<div class="sync-status-indicator mb-2" style="color:var(--accent-red);"><i class="fa-solid fa-triangle-exclamation"></i> <span>${escapeHtmlSafe(profile.lastError.message)}</span>${loginButtonsHTML(profile)}</div>`
         : "";
 
-    const paceSections = computeProviderPace(provider, sync, now, monthlySync);
     const sectionsHTML = paceSections
         .map(s => paceSectionHTML(s.title, meta.cls, s.capPct, s.timePct, s.resetLabel))
         .join("");
     // Timer ring = time left in the window the ring shows.
-    const ringSec = paceSections.find(s => s.capPct === pct) || paceSections[0];
+    const ringSec = weekOnly ? weekSec : (paceSections.find(s => s.capPct === pct) || paceSections[0]);
     const timeNum = ringSec ? Math.max(0, Math.min(100, Number(ringSec.timePct) || 0)) : 0;
     const rt = 69, circT = 2 * Math.PI * rt;
     const timerHTML = timeNum > 0
         ? `<circle class="progress-ring__timer" r="${rt}" cx="65" cy="65" style="stroke-dasharray:${circT} ${circT}; stroke-dashoffset:${circT - ((100 - timeNum) / 100) * circT};"/>`
         : "";
     const ringIs5h = !!ringSec && /^(5 Hour|Current Session)/.test(ringSec.title);
-    const weekHTML = weekDonutHTML(meta.cls, paceSections.find(s => /^Weekly/.test(s.title) && s.capPct !== undefined && s.capPct !== null));
+    const weekHTML = weekOnly ? "" : weekDonutHTML(meta.cls, weekSec);
 
     return `
     <div class="glass-panel provider-card ${meta.cls}-card mp-card" data-tile-key="${escapeHtmlSafe(tileKey(profile.id, provider))}">
@@ -5025,7 +5032,7 @@ function buildSnapshotCard(provider, profile) {
                 </svg>
                 <div class="progress-value">
                     <span class="pct" style="font-size:1.6rem;">${(pct === undefined || pct === null) ? "—" : `${Math.round(usedNum)}%`}</span>
-                    <span class="lbl">Used${ringIs5h ? " · 5h" : ""}</span>
+                    <span class="lbl">Used${ringIs5h ? " · 5h" : (weekOnly ? " · week" : "")}</span>
                 </div>
                 ${weekHTML}
             </div>
