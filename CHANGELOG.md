@@ -7,6 +7,7 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 ## [Nog niet uitgebracht]
 
 - **Central usage tracks job reasoning effort and removes duplicate Codex rows reported by their source PC.**
+- **Cloud sync keeps the latest measurement per profile and service, and monthly resets use the measured timestamp.** Firebase pairing data migrates on upload, requests time out, and the sync log shows the outcome of each part.
 - **`/v1/verbruik` counts Codex output once.** Reasoning tokens are already part of `output`; they were added a second time.
 - **Unknown cost is no longer $0.** Each group has `regels_zonder_prijs`; `usd` is `null` when no row has a price.
 - **Re-sent Codex rows fill a missing price.** Only an empty `usd` is filled; nothing else is overwritten.

@@ -15,6 +15,7 @@ const ASSETS = [
   './index.html',
   './style.css?v=0.37.0',
   './app.js?v=0.37.0',
+  './lib/cloud-sync.js',
   './lib/chart.min.js',
   './lib/qrcode.min.js',
   './assets/usage-dashboard-logo.svg',
