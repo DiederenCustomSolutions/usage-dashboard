@@ -322,29 +322,32 @@ function checkCodexLogDashboard() {
     let [button, panel] = render();
     assert.deepEqual(legend(button), ['No model data after 15 Nov']);
     assert.equal(panel.children[1].textContent, 'No hourly data');
-    assert.equal(panel.children[3].textContent, '7-day totals');
+    assert.equal(panel.children[3].textContent, '18 Nov share'); // The list follows the open day.
     assert.equal(panel.children[2].className, 'um-tip');
     checks++;
 
     chatgpt.modelUsageLog = {checkedAt, units: 'tokens', source: 'codex-log', days: [
         {date: '2026-11-11', models: {expired: 10}},
-        {date: '2026-11-15', models: {overlap: 9000000}},
+        {date: '2026-11-15', models: {'gpt-6.2-sol': 9000000}}, // Log wins over the report.
         {date: '2026-11-18', models: {'gpt-6.2-astra': 1200000}}
     ]};
     [button, panel] = render();
     const item = ui.usageRowsFromProfiles().rows[0];
-    assert.deepEqual(Array.from(item.segments, s => [s.label, s.value]), [['Astra 6.2', 62.5], ['Sol 6.1', 37.5]]);
+    assert.deepEqual(Array.from(item.segments, s => [s.label, s.value]), [['Sol 6.2', 50], ['Astra 6.2', 50]]);
     assert.deepEqual(legend(button), ['Codex log']);
     const columns = panel.children[0].children;
     assert.equal(columns.length, 7);
-    assert.equal(columns[3].children[0].title, '15 Nov · Sol 6.1 3%, Astra 6.2 1%');
-    assert.equal(columns[3].children[0].children[0].style.height, '75%');
+    assert.equal(columns[3].children[0].title, '15 Nov · Codex log · Sol 6.2 9M tok');
     assert.equal(columns[6].children.at(-1), '1.2M tok');
     assert.equal(columns[6].children[0].title, '18 Nov · Codex log · Astra 6.2 1.2M tok');
     assert.equal(columns[6].children[0].children[0].getAttribute('data-tip'), '18 Nov · Astra 6.2 1.2M tok · 100%');
     assert.equal(panel.children[1].textContent, 'No hourly data'); // Older snapshot with days only.
+    assert.equal(panel.children[3].textContent, '18 Nov share');
+    assert.equal(panel.children[4].children[0].children[0].children.at(-1).textContent, '100%');
+    columns[6].children[0].click(); // Closing the day shows the week again.
     assert.equal(panel.children[3].textContent, 'Average daily share');
-    assert.equal(panel.children[4].children[0].children.at(-1).textContent, '62.5%');
+    assert.equal(panel.children[4].children[0].children[0].children.at(-1).textContent, '50%');
+    columns[6].children[0].click();
     checks++;
 
     const localHour = day => new Date(2026, 10, day, 14).toISOString();
