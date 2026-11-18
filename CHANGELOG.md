@@ -6,6 +6,7 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ## [Nog niet uitgebracht]
 
+- **Job usage is recorded per round.** `GET /v1/klussen` includes each recorded round’s account, session, reasoning effort, limit readings, weekly reset time and exit code. PCs retain rounds locally until the API confirms ingestion protocol 3.
 - **Ingestion protocol 2 confirms job reasoning effort.** The PC hashes the acknowledged fields, so jobs sent to an older server are resubmitted with effort after the upgrade.
 - **Codex deduplication preserves limit resets.** The PC keeps limit changes as zero-token rows and can recover missing changes from a local backup. The API persists verified deletions per PC to prevent reingestion.
 - **Codex totals account for standalone turns.** A cumulative reading subtracts the standalone tokens already booked since the previous total. New rows use numbers above both the confirmed position and the highest number issued.

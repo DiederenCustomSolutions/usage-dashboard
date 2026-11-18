@@ -10,7 +10,8 @@ import { createHash } from "node:crypto";
 const columns = {
     berichten: ["id", "tijd", "tijd_eind", "bron", "sessie_id", "titel", "project", "model", "input", "output", "cache_lees", "cache_schrijf_5m", "cache_schrijf_1u", "koud", "subagent", "prijs"],
     codex: ["id", "tijd", "account", "sessie_id", "werkmap", "model", "input", "cached_input", "output", "reasoning", "usd", "vijf_uur_pct", "week_pct"],
-    klussen: ["id", "klusmap", "account", "model", "start", "eind", "week_voor", "week_na", "vijf_uur_voor", "vijf_uur_na", "input", "output", "usd", "pr", "exitcode", "gelukt", "status", "effort"]
+    klussen: ["id", "klusmap", "account", "model", "start", "eind", "week_voor", "week_na", "vijf_uur_voor", "vijf_uur_na", "input", "output", "usd", "pr", "exitcode", "gelukt", "status", "effort"],
+    klus_rondes: ["klus_id", "ronde", "account", "model", "effort", "sessie_id", "start", "eind", "vijf_uur_voor", "vijf_uur_na", "week_voor", "week_na", "week_reset", "exitcode"]
 };
 const backupMap = workerData.backupMap ?? path.join(os.homedir(), ".local", "share", "usage-api", "backup");
 const backupPattern = /^usage-(\d{4}-\d{2}-\d{2})\.sqlite$/;
@@ -92,6 +93,13 @@ try {
             input INTEGER, output INTEGER, usd REAL, pr TEXT, exitcode INTEGER,
             gelukt INTEGER, status TEXT, ontvangen_op TEXT, effort TEXT
         );
+        CREATE TABLE IF NOT EXISTS klus_rondes (
+            pc TEXT NOT NULL, klus_id TEXT NOT NULL, ronde INTEGER NOT NULL,
+            account TEXT, model TEXT, effort TEXT, sessie_id TEXT, start TEXT, eind TEXT,
+            vijf_uur_voor REAL, vijf_uur_na REAL, week_voor REAL, week_na REAL,
+            week_reset INTEGER, exitcode INTEGER, ontvangen_op TEXT,
+            PRIMARY KEY (pc, klus_id, ronde)
+        );
         CREATE TABLE IF NOT EXISTS inname_log (
             rij INTEGER PRIMARY KEY, pc TEXT, tabel TEXT, tijd TEXT,
             ontvangen INTEGER, nieuw INTEGER, positie INTEGER
@@ -100,7 +108,7 @@ try {
     if (!db.prepare("PRAGMA table_info(klussen)").all().some(column => column.name === "effort")) {
         db.exec("ALTER TABLE klussen ADD COLUMN effort TEXT");
     }
-    if (db.prepare("PRAGMA user_version").get().user_version < 4) db.exec("PRAGMA user_version = 4");
+    if (db.prepare("PRAGMA user_version").get().user_version < 5) db.exec("PRAGMA user_version = 5");
     db.exec("COMMIT");
     try {
         const dates = fs.readdirSync(backupMap, { withFileTypes: true })
@@ -109,8 +117,17 @@ try {
     } catch { /* No backups yet, or an unavailable backup directory. */ }
     const ingest = Object.fromEntries(Object.entries(columns).map(([table, fields]) => {
         const names = [...fields, "pc", "ontvangen_op", ...(table === "klussen" ? ["vingerafdruk"] : [])];
+        if (table === "klus_rondes") {
+            const measurements = fields.slice(2);
+            const updates = [...measurements, "ontvangen_op"].map(field => `${field}=excluded.${field}`);
+            const changed = measurements.map(field => `klus_rondes.${field} IS NOT excluded.${field}`);
+            return [table, db.prepare(`INSERT INTO klus_rondes (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})
+                ON CONFLICT (pc, klus_id, ronde) DO UPDATE SET ${updates.join(", ")} WHERE ${changed.join(" OR ")}`)];
+        }
         return [table, db.prepare(`INSERT OR IGNORE INTO ${table} (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)];
     }));
+    const selectRounds = db.prepare(`SELECT ${columns.klus_rondes.join(", ")} FROM klus_rondes
+        WHERE pc = ? AND klus_id = ? ORDER BY ronde`);
     const deleteCodex = db.prepare("DELETE FROM codex WHERE id = ? AND pc = ?");
     const recordDeletion = db.prepare("INSERT OR IGNORE INTO codex_verwijderd (pc, id, tijd) VALUES (?, ?, ?)");
     const wasDeleted = db.prepare("SELECT 1 FROM codex_verwijderd WHERE pc = ? AND id = ?");
@@ -144,8 +161,9 @@ try {
             } else if (message.type === "inname") {
                 const { tabel, pc, positie = null, rijen, protocol } = message;
                 const fields = tabel === "codex_verwijderd" ? ["id"] : columns[tabel];
+                const limitCorrection = tabel === "codex" && (protocol === 2 || protocol === 3);
                 if (rijen.some(row => fields.some(key => row[key] !== null && typeof row[key] === "object")
-                    || (tabel === "codex" && protocol === 2 && row.limietcorrectie === true
+                    || (limitCorrection && row.limietcorrectie === true
                         && ((row.week_pct == null && row.vijf_uur_pct == null)
                             || [row.input, row.cached_input, row.output, row.reasoning, row.usd].some(value => value !== 0))))) {
                     parentPort.postMessage({ id: message.id, result: { ongeldig: true } });
@@ -175,7 +193,7 @@ try {
                         // Explicit limit repairs preserve the measurement and correct the old token count.
                         let corrected = 0;
                         if (tabel === "codex" && !changes) {
-                            if (protocol === 2 && row.limietcorrectie === true) {
+                            if (limitCorrection && row.limietcorrectie === true) {
                                 const identity = [row.model, row.tijd, row.account, row.sessie_id,
                                     row.werkmap, row.vijf_uur_pct, row.week_pct].map(sqlValue);
                                 corrected = Number(correctLimitRow.run(row.id, pc, ...identity).changes);
@@ -255,6 +273,10 @@ try {
                     WHERE rij IN (SELECT MAX(rij) FROM klussen GROUP BY id)
                     ${sinds === null ? "" : "AND julianday(start) >= julianday(?)"}
                     ORDER BY julianday(start) DESC, rij DESC LIMIT ?`).all(...(sinds === null ? [] : [sinds]), max);
+                for (const row of rows) {
+                    const rondes = selectRounds.all(row.pc, row.id);
+                    if (rondes.length) row.rondes = rondes;
+                }
                 parentPort.postMessage({ id: message.id, result: { klussen: rows } });
             } else if (message.type === "close") {
                 db.close();

@@ -268,6 +268,8 @@ function tokenOk(header, token) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+const RONDE_PROTOCOL = 3;
+
 // Bounded streaming: Content-Length is only an early check, never trusted as a limit.
 async function readInname(req) {
     const limit = 8 * 1024 * 1024;
@@ -282,17 +284,24 @@ async function readInname(req) {
     let body;
     try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
     catch { return { status: 400 }; }
-    if (body?.protocol === 2 && body.tabel === "klussen"
+    const protocol = body?.protocol === RONDE_PROTOCOL ? RONDE_PROTOCOL : 2;
+    if (body?.protocol === protocol && body.tabel === "klussen"
         && Array.isArray(body.rijen) && body.rijen.length === 0 && body.positie === 0) {
-        return { peiling: true };
+        return { peiling: true, protocol };
     }
-    if (!body || !["berichten", "codex", "klussen", "codex_verwijderd"].includes(body.tabel)
-        || (body.tabel === "codex_verwijderd" && body.protocol !== 2)
+    const rounds = body?.tabel === "klus_rondes";
+    if (!body || !["berichten", "codex", "klussen", "codex_verwijderd", "klus_rondes"].includes(body.tabel)
+        || (body.tabel === "codex_verwijderd" && body.protocol !== protocol)
+        || (rounds && body.protocol !== RONDE_PROTOCOL)
         || !Array.isArray(body.rijen) || body.rijen.length < 1 || body.rijen.length > 5000
-        || body.rijen.some(row => !row || typeof row !== "object" || Array.isArray(row)
-            || typeof row.id !== "string" || !row.id.trim())
+        || body.rijen.some(row => {
+            if (!row || typeof row !== "object" || Array.isArray(row)) return true;
+            const id = rounds ? row.klus_id : row.id;
+            return typeof id !== "string" || !id.trim()
+                || (rounds && (!Number.isSafeInteger(row.ronde) || row.ronde < 1));
+        })
         || (body.positie !== undefined && (!Number.isSafeInteger(body.positie) || body.positie < 0))) return { status: 400 };
-    return { body };
+    return { body, protocol };
 }
 
 const isoTimestamp = value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value));
@@ -347,17 +356,17 @@ export function createServer({ config, token, store, innameFile = config.inname_
                 reloadInname();
                 const pc = pcVoorToken(req.headers.authorization, inname);
                 if (!pc) return send(401, { fout: "token ontbreekt of klopt niet" });
-                const { body, status, peiling } = await readInname(req);
+                const { body, status, peiling, protocol } = await readInname(req);
                 if (status) return send(status, { fout: status === 413 ? "body te groot" : "ongeldige inname" });
                 if (peiling) {
                     const latest = await laatsteBackup(backupMap).catch(() => null);
-                    return send(200, { ok: true, protocol: 2, nieuw: 0, backup: latest?.slice(6, 16) ?? null });
+                    return send(200, { ok: true, protocol, nieuw: 0, backup: latest?.slice(6, 16) ?? null });
                 }
-                const { tabel, rijen, positie = null, protocol } = body;
-                const result = await store.inname?.({ tabel, pc, positie, rijen, protocol });
+                const { tabel, rijen, positie = null } = body;
+                const result = await store.inname?.({ tabel, pc, positie, rijen, protocol: body.protocol === protocol ? protocol : undefined });
                 if (!result || result.fout) return send(503, { fout: "historie niet beschikbaar" });
                 if (result.ongeldig) return send(400, { fout: "ongeldige inname" });
-                return send(200, { ok: true, protocol: 2, tabel, ontvangen: rijen.length, nieuw: result.nieuw, positie, backup: result.backup });
+                return send(200, { ok: true, protocol, tabel, ontvangen: rijen.length, nieuw: result.nieuw, positie, backup: result.backup });
             }
             if (!tokenOk(req.headers.authorization, token)) return send(401, { fout: "token ontbreekt of klopt niet" });
             const now = clock();

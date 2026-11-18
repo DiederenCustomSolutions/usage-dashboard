@@ -667,18 +667,19 @@ async function withDatabase(file, fn) {
 }
 const plainRows = rows => rows.map(row => ({ ...row }));
 
-test("central schema: tables, columns, indexes and version 4 exist before ingestion", async t => {
+test("central schema: tables, columns, indexes and version 5 exist before ingestion", async t => {
     const f = historyFixture(t), store = f.makeStore(); f.cleanup();
     await store.verloop(); // Barrier: initialization has finished in the worker.
     await withDatabase(f.historyFile, db => {
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(r => r.name).sort();
-        assert.deepEqual(tables, ["berichten", "codex", "codex_verwijderd", "inname_log", "klussen", "metingen"]);
-        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 4);
+        assert.deepEqual(tables, ["berichten", "codex", "codex_verwijderd", "inname_log", "klus_rondes", "klussen", "metingen"]);
+        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5);
         const expected = {
             berichten: "id pc tijd tijd_eind bron sessie_id titel project model input output cache_lees cache_schrijf_5m cache_schrijf_1u koud subagent prijs ontvangen_op",
             codex: "id pc tijd account sessie_id werkmap model input cached_input output reasoning usd vijf_uur_pct week_pct ontvangen_op",
             codex_verwijderd: "pc id tijd",
             klussen: "rij vingerafdruk pc id klusmap account model start eind week_voor week_na vijf_uur_voor vijf_uur_na input output usd pr exitcode gelukt status ontvangen_op effort",
+            klus_rondes: "pc klus_id ronde account model effort sessie_id start eind vijf_uur_voor vijf_uur_na week_voor week_na week_reset exitcode ontvangen_op",
             inname_log: "rij pc tabel tijd ontvangen nieuw positie"
         };
         for (const [table, names] of Object.entries(expected)) {
@@ -823,6 +824,9 @@ test("inname protocol probe confirms effort support without writing an ingestion
     const response = await f.post(body);
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true, protocol: 2, nieuw: 0, backup: null });
+    const roundProbe = await f.post({ ...body, protocol: 3 });
+    assert.equal(roundProbe.status, 200);
+    assert.deepEqual(await roundProbe.json(), { ok: true, protocol: 3, nieuw: 0, backup: null });
     await f.store.verloop();
     await withDatabase(f.historyFile, db => assert.equal(db.prepare("SELECT COUNT(*) AS n FROM inname_log").get().n, 0));
 });
@@ -1031,8 +1035,8 @@ test("migration: old metingen database is extended without changing existing row
     assert.equal(rows[0].week_pct, 45);
     assert.equal(rows[0].account, "old");
     await withDatabase(f.historyFile, db => {
-        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 4);
-        assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n, 6);
+        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5);
+        assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n, 7);
     });
 });
 
@@ -1043,7 +1047,7 @@ test("migration: version 2 jobs retain their fingerprint and expose null effort"
     const send = (store, row) => store.inname({ tabel: "klussen", pc: "test-pc", rijen: [row] });
     assert.equal((await send(first, legacy)).nieuw, 1);
     await first.close();
-    await withDatabase(f.historyFile, db => db.exec("ALTER TABLE klussen DROP COLUMN effort; PRAGMA user_version = 2"));
+    await withDatabase(f.historyFile, db => db.exec("DROP TABLE klus_rondes; ALTER TABLE klussen DROP COLUMN effort; PRAGMA user_version = 2"));
 
     const store = f.makeStore(); f.cleanup();
     assert.equal((await store.klussen()).klussen[0].effort, null);
@@ -1054,11 +1058,26 @@ test("migration: version 2 jobs retain their fingerprint and expose null effort"
     const { klussen } = await store.klussen();
     assert.deepEqual(klussen.map(({ id, effort }) => [id, effort]), [[legacy.id, "high"]]);
     await withDatabase(f.historyFile, db => {
-        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 4);
+        assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5);
         const column = db.prepare("PRAGMA table_info(klussen)").all().find(row => row.name === "effort");
         assert.equal(column.type, "TEXT");
         assert.equal(db.prepare("SELECT count(*) AS n FROM klussen").get().n, 2);
     });
+});
+
+test("migration: version 4 keeps existing jobs and adds their round table", async t => {
+    const f = historyFixture(t);
+    const first = f.makeStore();
+    await first.inname({ tabel: "klussen", pc: "test-pc", rijen: [{ id: "existing", status: "klaar", effort: "high" }] });
+    const before = await first.klussen();
+    await first.close();
+    await withDatabase(f.historyFile, db => db.exec("DROP TABLE klus_rondes; PRAGMA user_version = 4"));
+
+    const store = f.makeStore(); f.cleanup();
+    assert.deepEqual(await store.klussen(), before);
+    assert.equal((await store.inname({ tabel: "klus_rondes", pc: "test-pc", protocol: 3,
+        rijen: [{ klus_id: "existing", ronde: 1 }] })).nieuw, 1);
+    assert.deepEqual((await store.klussen()).klussen[0].rondes.map(row => row.ronde), [1]);
 });
 
 test("inname-token CLI: random token once, hash only, private mode, replace pc and custom path", async t => {
@@ -1277,6 +1296,43 @@ test("HTTP klussen: newest snapshot per id, complete fields, start order and inc
     assert.deepEqual((await (await f.get("/v1/klussen?max=1")).json()).klussen.map(row => row.id), ["newest-start"]);
     assert.deepEqual(await (await f.get("/v1/klussen?sinds=2027-01-01T00:00:00Z")).json(), { klussen: [] });
     assert.equal(f.state.reads, 0);
+});
+
+test("HTTP klussen: two-account rounds are ordered, PC-scoped and upserted with protocol 3", async t => {
+    const f = await innameFixture(t);
+    const common = { klus_id: "job", model: "gpt-6.2-sol", effort: "high" };
+    const first = { ...common, ronde: 1, account: "account2", sessie_id: "sessie-1",
+        start: "2026-11-10T10:00:00Z", eind: "2026-11-10T10:10:00Z", vijf_uur_voor: null,
+        vijf_uur_na: null, week_voor: 21, week_na: 0, week_reset: 1794909600, exitcode: 1 };
+    const second = { ...common, ronde: 2, account: "account3", sessie_id: "sessie-2",
+        start: first.eind, eind: "2026-11-10T10:20:00Z", vijf_uur_voor: 2, vijf_uur_na: 4,
+        week_voor: null, week_na: null, week_reset: null, exitcode: 0 };
+    const body = { tabel: "klus_rondes", protocol: 3, positie: 42,
+        rijen: [second, { ...first, pc: "other-pc", extra: { ignored: true } }] };
+    for (const invalid of [{ ...body, protocol: 2 }, { ...body, rijen: [first, { ...second, ronde: 0 }] },
+        { ...body, rijen: [{ ...first, klus_id: " " }] }]) {
+        assert.equal((await f.post(invalid)).status, 400);
+    }
+    const accepted = await f.post(body);
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(await accepted.json(), { ok: true, protocol: 3, tabel: body.tabel, ontvangen: 2,
+        nieuw: 2, positie: 42, backup: new Date().toISOString().slice(0, 10) });
+    assert.equal((await (await f.post(body)).json()).nieuw, 0);
+    const corrected = { ...second, week_na: 0, week_reset: 1794913200 };
+    assert.equal((await (await f.post({ ...body, rijen: [corrected] })).json()).nieuw, 1);
+    const foreign = { ...first, account: "account1", sessie_id: "andere-pc" };
+    assert.equal((await (await f.post({ ...body, rijen: [foreign] }, OTHER_PC_TOKEN)).json()).nieuw, 1);
+
+    await f.post({ tabel: "klussen", rijen: [{ id: "job", account: "account2,account3", start: first.start }, { id: "old" }] });
+    const { klussen } = await (await f.get("/v1/klussen")).json();
+    assert.deepEqual(klussen[0].rondes, [first, corrected]);
+    assert.equal(klussen[1].id, "old");
+    assert.ok(!Object.hasOwn(klussen[1], "rondes"));
+
+    await f.post({ tabel: "klussen", rijen: [{ id: "job", account: "account1", start: first.start }] }, OTHER_PC_TOKEN);
+    const latest = await (await f.get("/v1/klussen?max=1")).json();
+    assert.equal(latest.klussen[0].pc, "other-pc");
+    assert.deepEqual(latest.klussen[0].rondes, [foreign]);
 });
 
 test("HTTP klussen: default 100, maximum 1000 and invalid limits or timestamps", async t => {
