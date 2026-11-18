@@ -14,6 +14,7 @@ const columns = {
 };
 const backupMap = workerData.backupMap ?? path.join(os.homedir(), ".local", "share", "usage-api", "backup");
 const backupPattern = /^usage-(\d{4}-\d{2}-\d{2})\.sqlite$/;
+const sqlValue = value => typeof value === "boolean" ? Number(value) : value ?? null;
 let backup = null, attemptedDay = null;
 
 function dailyBackup() {
@@ -81,6 +82,9 @@ try {
         );
         CREATE INDEX IF NOT EXISTS codex_account_tijd ON codex(account, tijd);
         CREATE INDEX IF NOT EXISTS codex_tijd ON codex(tijd);
+        CREATE TABLE IF NOT EXISTS codex_verwijderd (
+            pc TEXT NOT NULL, id TEXT NOT NULL, tijd TEXT NOT NULL, PRIMARY KEY (pc, id)
+        );
         CREATE TABLE IF NOT EXISTS klussen (
             rij INTEGER PRIMARY KEY, vingerafdruk TEXT UNIQUE, pc TEXT, id TEXT,
             klusmap TEXT, account TEXT, model TEXT, start TEXT, eind TEXT,
@@ -96,7 +100,7 @@ try {
     if (!db.prepare("PRAGMA table_info(klussen)").all().some(column => column.name === "effort")) {
         db.exec("ALTER TABLE klussen ADD COLUMN effort TEXT");
     }
-    if (db.prepare("PRAGMA user_version").get().user_version < 3) db.exec("PRAGMA user_version = 3");
+    if (db.prepare("PRAGMA user_version").get().user_version < 4) db.exec("PRAGMA user_version = 4");
     db.exec("COMMIT");
     try {
         const dates = fs.readdirSync(backupMap, { withFileTypes: true })
@@ -108,7 +112,12 @@ try {
         return [table, db.prepare(`INSERT OR IGNORE INTO ${table} (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)];
     }));
     const deleteCodex = db.prepare("DELETE FROM codex WHERE id = ? AND pc = ?");
-    const fillCodexPrice = db.prepare("UPDATE codex SET usd = ? WHERE id = ? AND usd IS NULL");
+    const recordDeletion = db.prepare("INSERT OR IGNORE INTO codex_verwijderd (pc, id, tijd) VALUES (?, ?, ?)");
+    const wasDeleted = db.prepare("SELECT 1 FROM codex_verwijderd WHERE pc = ? AND id = ?");
+    const fillCodexPrice = db.prepare("UPDATE codex SET usd = ? WHERE id = ? AND pc = ? AND model IS ? AND usd IS NULL");
+    const correctLimitRow = db.prepare(`UPDATE codex SET input = 0, cached_input = 0, output = 0, reasoning = 0, usd = 0
+        WHERE id = ? AND pc = ? AND model IS ? AND tijd IS ? AND account IS ? AND sessie_id IS ?
+            AND werkmap IS ? AND vijf_uur_pct IS ? AND week_pct IS ?`);
     const audit = db.prepare("INSERT OR IGNORE INTO inname_log (pc, tabel, tijd, ontvangen, nieuw, positie) VALUES (?, ?, ?, ?, ?, ?)");
     const previousCodex = db.prepare("SELECT vijf_uur_pct, week_pct FROM metingen WHERE account = ? AND bron = 'codex' AND laatst_gezien < ? ORDER BY laatst_gezien DESC LIMIT 1");
     const codexMeasurement = db.prepare(`INSERT OR IGNORE INTO metingen
@@ -133,9 +142,12 @@ try {
                 db.exec("COMMIT");
                 dailyBackup();
             } else if (message.type === "inname") {
-                const { tabel, pc, positie = null, rijen } = message;
+                const { tabel, pc, positie = null, rijen, protocol } = message;
                 const fields = tabel === "codex_verwijderd" ? ["id"] : columns[tabel];
-                if (rijen.some(row => fields.some(key => row[key] !== null && typeof row[key] === "object"))) {
+                if (rijen.some(row => fields.some(key => row[key] !== null && typeof row[key] === "object")
+                    || (tabel === "codex" && protocol === 2 && row.limietcorrectie === true
+                        && ((row.week_pct == null && row.vijf_uur_pct == null)
+                            || [row.input, row.cached_input, row.output, row.reasoning, row.usd].some(value => value !== 0))))) {
                     parentPort.postMessage({ id: message.id, result: { ongeldig: true } });
                     return;
                 }
@@ -146,11 +158,13 @@ try {
                 try {
                     for (const row of rows) {
                         if (tabel === "codex_verwijderd") {
+                            recordDeletion.run(pc, row.id, receivedAt);
                             nieuw += Number(deleteCodex.run(row.id, pc).changes);
                             continue;
                         }
+                        if (tabel === "codex" && wasDeleted.get(pc, row.id)) continue;
                         const values = fields.map(key => row[key] ?? null);
-                        const args = [...values.map(v => typeof v === "boolean" ? Number(v) : v), pc, receivedAt];
+                        const args = [...values.map(sqlValue), pc, receivedAt];
                         if (tabel === "klussen") {
                             // Keep the pre-effort fingerprint for snapshots without an effort value.
                             const fingerprint = values.at(-1) === null ? values.slice(0, -1) : values;
@@ -158,15 +172,22 @@ try {
                         }
                         const changes = Number(ingest[tabel].run(...args).changes);
                         nieuw += changes;
-                        // Price backfills do not count as new rows or generate limit measurements.
-                        if (tabel === "codex" && !changes && row.usd != null) {
-                            fillCodexPrice.run(args[columns.codex.indexOf("usd")], row.id);
+                        // Explicit limit repairs preserve the measurement and correct the old token count.
+                        let corrected = 0;
+                        if (tabel === "codex" && !changes) {
+                            if (protocol === 2 && row.limietcorrectie === true) {
+                                const identity = [row.model, row.tijd, row.account, row.sessie_id,
+                                    row.werkmap, row.vijf_uur_pct, row.week_pct].map(sqlValue);
+                                corrected = Number(correctLimitRow.run(row.id, pc, ...identity).changes);
+                            } else if (row.usd != null) {
+                                fillCodexPrice.run(sqlValue(row.usd), row.id, pc, sqlValue(row.model));
+                            }
                         }
-                        if (tabel === "codex" && changes && (row.week_pct != null || row.vijf_uur_pct != null)) {
-                            const five = row.vijf_uur_pct ?? null, week = row.week_pct ?? null;
-                            const previous = previousCodex.get(row.account ?? null, row.tijd ?? null);
+                        if (tabel === "codex" && (changes || corrected) && (row.week_pct != null || row.vijf_uur_pct != null)) {
+                            const [account, time, five, week] = [row.account, row.tijd, row.vijf_uur_pct, row.week_pct].map(sqlValue);
+                            const previous = previousCodex.get(account, time);
                             if (!previous || previous.vijf_uur_pct !== five || previous.week_pct !== week) {
-                                codexMeasurement.run(receivedAt, row.account ?? null, row.tijd ?? null, five, week);
+                                codexMeasurement.run(receivedAt, account, time, five, week);
                             }
                         }
                     }
@@ -219,7 +240,9 @@ try {
                     FROM codex WHERE tijd >= ? AND tijd < ?
                 ) SELECT ${group}, COUNT(*) AS regels, COALESCE(SUM(input), 0) AS input,
                     COALESCE(SUM(output), 0) AS output, COALESCE(SUM(cache_lees), 0) AS cache_lees,
-                    COALESCE(SUM(cache_schrijf), 0) AS cache_schrijf, ROUND(SUM(usd), 4) AS usd,
+                    COALESCE(SUM(cache_schrijf), 0) AS cache_schrijf,
+                    CASE WHEN COUNT(usd) = COUNT(*) THEN ROUND(SUM(usd), 4) END AS usd,
+                    ROUND(COALESCE(SUM(usd), 0), 4) AS usd_bekend,
                     COUNT(*) - COUNT(usd) AS regels_zonder_prijs${extras.map(e => ", " + e).join("")}
                 FROM verbruik ${bron === null ? "" : "WHERE bron = ?"}
                 GROUP BY ${group} ORDER BY ${group}`).all(

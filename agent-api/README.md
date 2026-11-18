@@ -60,12 +60,17 @@ SQLite draait uitsluitend in één worker-thread. De tabellen zijn:
 | `metingen` | Limietpercentages, resets en reset-tegoeden per account; ook Codex-metingen |
 | `berichten` | Claude-berichten met model, sessie, titel/project, tokens en prijs; uniek op `id` |
 | `codex` | Codex-tokenregels met account, werkmap, tokens, USD en limietpercentages; uniek op `id` |
+| `codex_verwijderd` | Bevestigde verwijderingen van bewezen Codex-dubbelen, uniek op `pc, id` |
 | `klussen` | Opeenvolgende klusstanden; ontdubbeld via een vingerafdruk van de inhoud |
 | `inname_log` | Audit per blok: pc, tabel, tijd, ontvangen/nieuwe regels en positie |
 
 `node agent-api/inname-token.mjs <pc>` maakt een inname-token voor een pc-naam van 1–32 kleine letters, cijfers of streepjes. Het token verschijnt één keer op stdout; bewaar het veilig. Alleen de SHA-256-hash komt in `inname.json` naast de config (modus 0600). Opnieuw uitvoeren vervangt het token voor die pc. `USAGE_API_CONFIG` kiest de config; `inname_bestand` kiest een ander tokenbestand. De dienst leest wijzigingen bij de volgende inname, zonder herstart of timer.
 
-`POST /v1/inname` gebruikt dit pc-token als Bearer-token en dezelfde adrescontrole als de lees-endpoints. Stuur JSON met `tabel` (`berichten`, `codex` of `klussen`), `rijen` (1–5000 objecten met een niet-leeg tekstveld `id`) en optioneel `positie` (geheel getal ≥ 0). De body mag maximaal 8 MiB zijn. De dienst vult `pc` en `ontvangen_op` zelf in en negeert onbekende kolommen. Antwoord: `{ "ok": true, "tabel": "codex", "ontvangen": 2, "nieuw": 2, "positie": null, "backup": "2026-11-14" }`. Herhalen voegt dezelfde regels niet nogmaals toe; klusstanden worden via hun inhoud ontdubbeld. Zonder beschikbare historie volgt HTTP 503. Het lees-token geeft geen toegang tot inname.
+`POST /v1/inname` gebruikt dit pc-token als Bearer-token en dezelfde adrescontrole als de lees-endpoints. Stuur JSON met `tabel` (`berichten`, `codex`, `klussen` of `codex_verwijderd`), `rijen` (1–5000 objecten met een niet-leeg tekstveld `id`) en optioneel `positie` (geheel getal ≥ 0). De body mag maximaal 8 MiB zijn. De dienst vult `pc` en `ontvangen_op` zelf in en negeert onbekende kolommen. Een geslaagde inname geeft bijvoorbeeld `{ "ok": true, "protocol": 2, "tabel": "codex", "ontvangen": 2, "nieuw": 2, "positie": null, "backup": "2026-11-14" }`. Herhalen voegt dezelfde regels één keer toe. De inhoud van de klus bepaalt de vingerafdruk. Zonder beschikbare historie volgt HTTP 503. Het lees-token geeft geen toegang tot inname.
+
+`protocol: 2` bevestigt ondersteuning voor `klussen.effort`, `codex_verwijderd` en limietcorrecties. Een pc kan het protocol opvragen met `{"tabel":"klussen","positie":0,"rijen":[],"protocol":2}`. Deze peiling meldt ook de recentste back-updatum en schrijft geen innameblok. Een antwoord zonder protocolveld bevestigt de oude klusvelden tot en met `status`.
+
+Stuur `codex_verwijderd` met `protocol: 2` en de ids die lokaal met de oorspronkelijke rollout zijn bewezen. De dienst bewaart die ids per geauthenticeerde pc en weigert herinname van een verwijderde regel door diezelfde pc, ook als de verwijdering vóór de eerste levering aankwam. `nieuw` telt de fysiek verwijderde rijen. Een herlevering van een prijs vult alleen een ontbrekend bedrag bij dezelfde pc, id en model. Een pc kan onder protocol 2 een bewezen limietregel met `limietcorrectie: true`, nul tokens en nul USD herleveren. Als de regel al bestaat, moeten pc, id, model, sessie, werkmap, tijdstip, account en beide limietpercentages overeenkomen.
 
 Voorbeeldbody (ontbrekende kolommen worden `null`):
 
@@ -78,16 +83,16 @@ Deze vier leesendpoints gebruiken hetzelfde lees-token en dezelfde adrescontrole
 | Endpoint | Parameters en antwoord |
 | --- | --- |
 | `GET /v1/verbruik` | `van`, `tot`: geldige UTC-dagen (`JJJJ-MM-DD`), beide inclusief, maximaal 400 dagen. Standaard `tot` vandaag UTC en `van` zes dagen eerder. `groep`: komma-lijst uit `dag,uur,account,model,klus,sessie`, standaard `dag,account`. `uur` is het UTC-klokuur, of met `uurstart=<ISO-tijdstip>` het aantal hele uren sinds dat tijdstip (geheel getal). Met `uur` of `sessie` komen `groot_usd` (berichten boven 150k context) en `subagent_usd` mee; `sessie` voegt `titel`, `project`, `eerste`, `laatste` toe. `bron`: optioneel `claude` of `codex`. Antwoord: `van`, `tot`, `groep[]`, `rijen[]`, oplopend gesorteerd op de gekozen velden en bron. |
-| `GET /v1/klussen` | `sinds`: optioneel ISO-tijdstip met tijdzone, inclusief filter op `start`. `max`: 1–1000, standaard 100. Antwoord `klussen[]`: per id de nieuwste stand (grootste `rij`), nieuwste start eerst. Velden: `id`, `pc`, `klusmap`, `account`, `model`, `start`, `eind`, `week_voor`, `week_na`, `vijf_uur_voor`, `vijf_uur_na`, `input`, `output`, `usd`, `pr`, `exitcode`, `gelukt`, `status`. |
+| `GET /v1/klussen` | `sinds`: optioneel ISO-tijdstip met tijdzone, inclusief filter op `start`. `max`: 1–1000, standaard 100. Antwoord `klussen[]`: per id de nieuwste stand (grootste `rij`), nieuwste start eerst. Velden: `id`, `pc`, `klusmap`, `account`, `model`, `start`, `eind`, `week_voor`, `week_na`, `vijf_uur_voor`, `vijf_uur_na`, `input`, `output`, `usd`, `pr`, `exitcode`, `gelukt`, `status`, `effort`. |
 | `GET /v1/verloop` | `account`, `sinds` (ISO-tijdstip met tijdzone, inclusief), `max` (positief geheel getal, standaard 500), `bron` (bijvoorbeeld `codex` of `api`): alle filters optioneel. Antwoord `metingen[]`, nieuwste `laatst_gezien` eerst. Zonder bronfilter komen ook Codex-metingen mee. |
 | `GET /v1/backup` | Geen parameters. Nieuwste `usage-JJJJ-MM-DD.sqlite` als gzip-stroom: `Content-Type: application/gzip`, `X-Backup-Datum: JJJJ-MM-DD`. Geen bestand: HTTP 404 met `{"fout":"geen back-up"}`. |
 
-Elke verbruiksrij bevat de gekozen groepvelden plus `bron`, `regels`, `input`, `output`, `cache_lees`, `cache_schrijf` en `usd` (vier decimalen afgerond). Claude krijgt account `claude` en klus `titel`, of `project` als de titel `null` is; cache-schrijven telt de 5m- en 1u-tokens op. Bij Codex is de klus de mapnaam na de laatste `/` of `\`, output is inclusief reasoning en cache-lezen is `cached_input`. Ontbrekende aantallen tellen als nul. De bronnen blijven altijd apart gegroepeerd.
+Elke verbruiksrij bevat de gekozen groepvelden plus `bron`, `regels`, `input`, `output`, `cache_lees`, `cache_schrijf`, `usd`, `usd_bekend` en `regels_zonder_prijs`. De API geeft `usd: null` zodra minstens één regel geen prijs heeft. `usd_bekend` telt de bekende bedragen op en is nul als geen enkele prijs bekend is. Beide bedragen worden afgerond op vier decimalen. Claude krijgt account `claude` en klus `titel`, of `project` als de titel `null` is; cache-schrijven telt de 5m- en 1u-tokens op. Bij Codex is de klus de mapnaam na de laatste `/` of `\`, output is inclusief reasoning en cache-lezen is `cached_input`. Ontbrekende aantallen tellen als nul. De bronnen blijven altijd apart gegroepeerd.
 
 Voorbeeld `/v1/verbruik?van=2026-11-14&tot=2026-11-14`:
 
 ```json
-{"van":"2026-11-14","tot":"2026-11-14","groep":["dag","account"],"rijen":[{"dag":"2026-11-14","account":"account1","bron":"codex","regels":1,"input":100,"output":25,"cache_lees":40,"cache_schrijf":0,"usd":0.0123}]}
+{"van":"2026-11-14","tot":"2026-11-14","groep":["dag","account"],"rijen":[{"dag":"2026-11-14","account":"account1","bron":"codex","regels":2,"input":100,"output":25,"cache_lees":40,"cache_schrijf":0,"usd":null,"usd_bekend":0.0123,"regels_zonder_prijs":1}]}
 ```
 
 Voorbeeld `/v1/verloop?account=account1&bron=codex&max=1`:

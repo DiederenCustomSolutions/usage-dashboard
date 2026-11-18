@@ -282,7 +282,12 @@ async function readInname(req) {
     let body;
     try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
     catch { return { status: 400 }; }
+    if (body?.protocol === 2 && body.tabel === "klussen"
+        && Array.isArray(body.rijen) && body.rijen.length === 0 && body.positie === 0) {
+        return { peiling: true };
+    }
     if (!body || !["berichten", "codex", "klussen", "codex_verwijderd"].includes(body.tabel)
+        || (body.tabel === "codex_verwijderd" && body.protocol !== 2)
         || !Array.isArray(body.rijen) || body.rijen.length < 1 || body.rijen.length > 5000
         || body.rijen.some(row => !row || typeof row !== "object" || Array.isArray(row)
             || typeof row.id !== "string" || !row.id.trim())
@@ -293,15 +298,19 @@ async function readInname(req) {
 const isoTimestamp = value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value));
 const utcDay = value => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 
-async function sendBackup(res, backupMap, send) {
+async function laatsteBackup(backupMap) {
     let entries;
     try { entries = await fs.promises.readdir(backupMap, { withFileTypes: true }); }
     catch (error) {
         if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
         entries = [];
     }
-    const latest = entries.filter(e => e.isFile() && /^usage-\d{4}-\d{2}-\d{2}\.sqlite$/.test(e.name))
+    return entries.filter(e => e.isFile() && /^usage-\d{4}-\d{2}-\d{2}\.sqlite$/.test(e.name))
         .map(e => e.name).sort().at(-1);
+}
+
+async function sendBackup(res, backupMap, send) {
+    const latest = await laatsteBackup(backupMap);
     if (!latest) return send(404, { fout: "geen back-up" });
     const stream = fs.createReadStream(path.join(backupMap, latest));
     // Open before sending headers, so an unreadable file still gives a JSON error.
@@ -338,13 +347,17 @@ export function createServer({ config, token, store, innameFile = config.inname_
                 reloadInname();
                 const pc = pcVoorToken(req.headers.authorization, inname);
                 if (!pc) return send(401, { fout: "token ontbreekt of klopt niet" });
-                const { body, status } = await readInname(req);
+                const { body, status, peiling } = await readInname(req);
                 if (status) return send(status, { fout: status === 413 ? "body te groot" : "ongeldige inname" });
-                const { tabel, rijen, positie = null } = body;
-                const result = await store.inname?.({ tabel, pc, positie, rijen });
+                if (peiling) {
+                    const latest = await laatsteBackup(backupMap).catch(() => null);
+                    return send(200, { ok: true, protocol: 2, nieuw: 0, backup: latest?.slice(6, 16) ?? null });
+                }
+                const { tabel, rijen, positie = null, protocol } = body;
+                const result = await store.inname?.({ tabel, pc, positie, rijen, protocol });
                 if (!result || result.fout) return send(503, { fout: "historie niet beschikbaar" });
                 if (result.ongeldig) return send(400, { fout: "ongeldige inname" });
-                return send(200, { ok: true, tabel, ontvangen: rijen.length, nieuw: result.nieuw, positie, backup: result.backup });
+                return send(200, { ok: true, protocol: 2, tabel, ontvangen: rijen.length, nieuw: result.nieuw, positie, backup: result.backup });
             }
             if (!tokenOk(req.headers.authorization, token)) return send(401, { fout: "token ontbreekt of klopt niet" });
             const now = clock();
