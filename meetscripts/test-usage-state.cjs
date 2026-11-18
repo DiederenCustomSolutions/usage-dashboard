@@ -244,7 +244,8 @@ function checkCodexLogDashboard() {
     let [button, panel] = render();
     assert.deepEqual(legend(button), ['No model data after 15 Nov']);
     assert.equal(panel.children[1].textContent, 'No hourly data');
-    assert.equal(panel.children[2].textContent, '7-day totals');
+    assert.equal(panel.children[3].textContent, '7-day totals');
+    assert.equal(panel.children[2].className, 'um-tip');
     checks++;
 
     chatgpt.modelUsageLog = {checkedAt, units: 'tokens', source: 'codex-log', days: [
@@ -262,9 +263,10 @@ function checkCodexLogDashboard() {
     assert.equal(columns[3].children[0].children[0].style.height, '75%');
     assert.equal(columns[6].children.at(-1), '1.2M tok');
     assert.equal(columns[6].children[0].title, '18 Nov · Codex log · Astra 6.2 1.2M tok');
+    assert.equal(columns[6].children[0].children[0].getAttribute('data-tip'), '18 Nov · Astra 6.2 1.2M tok · 100%');
     assert.equal(panel.children[1].textContent, 'No hourly data'); // Older snapshot with days only.
-    assert.equal(panel.children[2].textContent, 'Average daily share');
-    assert.equal(panel.children[3].children[0].children.at(-1).textContent, '62.5%');
+    assert.equal(panel.children[3].textContent, 'Average daily share');
+    assert.equal(panel.children[4].children[0].children.at(-1).textContent, '62.5%');
     checks++;
 
     const localHour = day => new Date(2026, 10, day, 14).toISOString();
