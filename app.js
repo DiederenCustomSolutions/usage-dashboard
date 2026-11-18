@@ -506,6 +506,16 @@ function renderVersionBadge(busyText) {
         });
     }
     const running = runningVersion();
+    // The logo opens versions and devices (the chip itself only shows when something is off).
+    const logo = document.querySelector(".app-header .logo-icon-wrapper");
+    if (logo) {
+        logo.title = `v${running}`;
+        if (!logo.dataset.wired) {
+            logo.dataset.wired = "1";
+            logo.style.cursor = "pointer";
+            logo.addEventListener("click", () => openVersionsAndUpdateBlock());
+        }
+    }
     const behind = (versionPeerState && versionPeerState.behind) || [];
     let state = "ok", text = `v${running}`, title = `This dashboard runs v${running}. Click for versions & devices.`;
     if (busyText) {
@@ -1946,6 +1956,8 @@ function updateParallelPace(provider, prefix, capPct, timePct) {
     
     timeBar.style.width = `${timePct}%`;
     if (timePctLbl) timePctLbl.innerText = `${timePct}%`;
+    // Thin outer ring around the tile ring = time left until the session reset.
+    if (prefix === "pace") setTimerRing(`ring-time-${provider}`, timePct);
     
     // Style capacity bar dynamically based on percentage
     if (capPct < 20) {
@@ -2405,6 +2417,7 @@ function renderDashboardProgress() {
         if (!has5h) {
             document.getElementById("pct-chatgpt").innerText = `${monthPct}%`;
             setProgressRing("ring-chatgpt", monthPct);
+            setTimerRing("ring-time-chatgpt", m.timePct);
             document.getElementById("sync-time-chatgpt").innerText = "Tab sync: " + formatTimeAgo(monthlySync.lastSynced);
         }
     } else if (secMonth) {
@@ -2528,6 +2541,15 @@ function setProgressRing(ringId, percent) {
     ring.style.strokeDasharray = `${circumference} ${circumference}`;
     const offset = circumference - (percent / 100) * circumference;
     ring.style.strokeDashoffset = offset;
+}
+
+// Timer ring: hidden when the reset time is unknown (0%).
+function setTimerRing(ringId, percent) {
+    const ring = document.getElementById(ringId);
+    if (!ring) return;
+    const p = Math.max(0, Math.min(100, Number(percent) || 0));
+    ring.style.display = p > 0 ? "" : "none";
+    if (p > 0) setProgressRing(ringId, p);
 }
 
 /* ==========================================================================
@@ -4933,9 +4955,17 @@ function buildSnapshotCard(provider, profile) {
         ? `<div class="sync-status-indicator mb-2" style="color:var(--accent-red);"><i class="fa-solid fa-triangle-exclamation"></i> <span>${escapeHtmlSafe(profile.lastError.message)}</span>${loginButtonsHTML(profile)}</div>`
         : "";
 
-    const sectionsHTML = computeProviderPace(provider, sync, now, monthlySync)
+    const paceSections = computeProviderPace(provider, sync, now, monthlySync);
+    const sectionsHTML = paceSections
         .map(s => paceSectionHTML(s.title, meta.cls, s.capPct, s.timePct, s.resetLabel))
         .join("");
+    // Timer ring = time left in the window the ring shows.
+    const ringSec = paceSections.find(s => s.capPct === pct) || paceSections[0];
+    const timeNum = ringSec ? Math.max(0, Math.min(100, Number(ringSec.timePct) || 0)) : 0;
+    const rt = 69, circT = 2 * Math.PI * rt;
+    const timerHTML = timeNum > 0
+        ? `<circle class="progress-ring__timer" r="${rt}" cx="65" cy="65" style="stroke-dasharray:${circT} ${circT}; stroke-dashoffset:${circT - (timeNum / 100) * circT};"/>`
+        : "";
 
     return `
     <div class="glass-panel provider-card ${meta.cls}-card mp-card" data-tile-key="${escapeHtmlSafe(tileKey(profile.id, provider))}">
@@ -4959,6 +4989,7 @@ function buildSnapshotCard(provider, profile) {
         <div class="progress-visualization">
             <div class="progress-ring-container" style="width:130px;height:130px;">
                 <svg class="progress-ring" width="130" height="130">
+                    ${timerHTML}
                     <circle class="progress-ring__circle-bg" stroke="rgba(255,255,255,0.04)" stroke-width="11" fill="transparent" r="${r}" cx="65" cy="65"/>
                     <circle class="progress-ring__circle ${meta.cls}-stroke" stroke-width="11" fill="transparent" r="${r}" cx="65" cy="65"
                         style="stroke-dasharray:${circ} ${circ}; stroke-dashoffset:${offset};"/>
@@ -6809,6 +6840,8 @@ function applyMobileSyncUI() {
         // Verberg de directe scrape links op mobiel
         syncActions.querySelectorAll(".sync-shortcut-icon").forEach(el => el.style.display = "none");
     }
+    const siteLinks = document.querySelector(".psm-site-links");
+    if (siteLinks) siteLinks.style.display = "none";
     
     const refreshAllBtn = document.getElementById("btn-sync-all");
     if (refreshAllBtn) {

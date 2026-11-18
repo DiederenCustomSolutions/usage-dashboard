@@ -11,6 +11,9 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 - Reports and Help placeholders removed from the tabs.
 - Phone: tabs move to a bottom bar.
 - Real Claude and OpenAI marks in the header and on the tiles (simple-icons, CC0).
+- Flat header without haze or glow. Avatar sits in the profile pill; its menu holds the Claude/ChatGPT usage links and log out.
+- Tile rings get a thin gray outer ring: time left until the reset.
+- Click the logo for versions and devices.
 
 ---
 
