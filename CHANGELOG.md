@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.38.1] — 2026-11-18
+
+- **Usage by model flags a frozen ChatGPT report.** OpenAI's daily model report stopped counting after 16 Nov 2026 (all accounts, all models). A row now says "No model data after <date>" when the report is more than a day behind the measurement.
+
+---
+
 ## [0.38.0] — 2026-11-18
 
 - Usage by model shows Planner account names, seven-day model totals and Claude weekly limits. Select a row to see the breakdown.

@@ -192,6 +192,7 @@ async function main() {
     context.toggleUsageDetails(container, button, panel, rows[0]);
     assert.equal(button['aria-expanded'],'false'); assert.equal(panel.hidden,true); checks++;
     check('Last day uses the latest day with usage',"(()=>{usageModelState.period='day';const r=usageRowsFromProfiles();return r.rows[0].segments.length===1&&r.rows[0].segments[0].label==='Luna 6'})()");
+    check('Frozen report is flagged',"(()=>{const g=sampleStatus.chatgpt.modelUsage;const old=g.checkedAt;g.checkedAt=Date.parse('2026-10-24T13:00:00Z');const s1=usageRowsFromProfiles().rows[0].stale;g.checkedAt=Date.parse('2026-10-22T20:00:00Z');const s2=usageRowsFromProfiles().rows[0].stale;g.checkedAt=old;return s1==='No model data after 21 Oct'&&s2===''})()");
     check('Selected profile filters rows',"(()=>{state.selectedProfileId='b';return usageRowsFromProfiles().rows.length===0})()");
     context.emptySample={...data,SESSIES:[]};
     context.fetch=async()=>({ok:true,json:async()=>context.emptySample});
