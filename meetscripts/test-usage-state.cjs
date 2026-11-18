@@ -86,6 +86,52 @@ async function checkMonthlyReset() {
     }
 }
 
+async function checkDailyReport() {
+    const report = {data: [{date: '2026-11-13', models: [
+        {model: 'gpt-6.1-sol', credits: 24.17}, {model: 'gpt-6.1-sol', credits: 6.25},
+        {model: 'gpt-6.2', credits: 0.004}, {model: 'gpt-6.2', credits: 0.004}
+    ]}]};
+    for (const file of ['app.js', 'content.js', 'background.js']) {
+        const script = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+        const start = script.indexOf('function chatgptUsageInPageFetch(');
+        const fn = script.slice(start, script.indexOf('\n}', start) + 2);
+        const fetch = async url => {
+            let value;
+            if (url === '/api/auth/session') value = {accessToken: 'fixture'};
+            else if (url === '/backend-api/wham/usage') value = {rate_limit: {primary_window: {used_percent: 25, limit_window_seconds: 18000}}};
+            else { assert.match(url, /daily-token-usage-breakdown/); value = report; }
+            return {ok: true, json: async () => value};
+        };
+        const result = await vm.runInNewContext(fn + '; chatgptUsageInPageFetch()', {fetch});
+        assert.equal(result.data.modelUsage.days[0].models['gpt-6.1-sol'], 30.42, file);
+        assert.equal(result.data.modelUsage.days[0].models['gpt-6.2'], 0.01, file);
+        checks++;
+    }
+}
+
+async function checkSharedMetaConflict() {
+    const start = source.indexOf('function cs2UpdateEnc(');
+    const update = source.slice(start, source.indexOf('\n}', start) + 2);
+    let reads = 0;
+    const writes = [];
+    const shared = {obj:{setting:1}, etag:'first'};
+    const sandbox = {
+        shared,
+        cs2ReadEnc:async () => { reads++; return {obj:{setting:2}, etag:'second'}; },
+        cs2WriteEnc:async (_cfg,_sub,obj,etag) => {
+            writes.push([obj.setting, obj.refreshRequested, etag]);
+            return {conflict: writes.length === 1};
+        }
+    };
+    await vm.runInNewContext(update + `;cs2UpdateEnc({}, 'meta', m => {
+        m.refreshRequested = true; return m;
+    }, 5, Promise.resolve(shared))`, sandbox);
+    assert.equal(reads,1);
+    assert.deepEqual(writes,[[1,true,'first'],[2,true,'second']]);
+    assert.deepEqual(shared.obj,{setting:1});
+    checks++;
+}
+
 async function main() {
     context.sample=data;
     check('Populated measurement validates','sample.SESSIES.length > 0 && validateUsageByModel(sample)');
@@ -116,12 +162,35 @@ async function main() {
     check('Clicks update period',"usageModelState.period==='7d'");
     assert.equal(JSON.parse(storage.get('ud_usage_model')).period,'7d');checks++;
     // Per-person rows from the measured profiles (the online data path).
-    check('Model names readable',"usageModelLabel('gpt-6.1-sol').label==='Sol 6.1' && usageModelLabel('gpt-6-astra').colour==='astra' && usageModelLabel('x').colour==='other'");
-    run(`state={selectedProfileId:null}; getAllProfilesForGrid=()=>[
-        {id:'a',label:'Rob',syncStatus:{chatgpt:{modelUsage:{checkedAt:1,days:[{date:'2026-10-20',models:{'gpt-6-sol':2}},{date:'2026-10-21',models:{'gpt-6-luna':1}},{date:'2026-10-22',models:{}}]}},
-            claude:{usageBreakdown:{checkedAt:2,rows:[{name:'Claude Code',pct:100},{name:'Chats',pct:0}]},scopedWeekly:[{name:'Fable',pctUsed:3}]}}},
-        {id:'b',label:'Kevin',syncStatus:{chatgpt:{pctRemaining:50}}}]`);
-    check('Rows per person, 7 days',"(()=>{usageModelState.period='7d';const r=usageRowsFromProfiles();return r.rows.length===2&&r.rows[0].segments.length===2&&r.rows[1].segments.length===1&&r.rows[1].extra[0]==='Fable limit 3% used'&&r.measuredAt===2})()");
+    for (const [model, label, colour] of [
+        ['gpt-6.2', 'GPT 6.2', 'other'], ['gpt-6.2-astra', 'Astra 6.2', 'astra'],
+        ['gpt-6.2-astra-mini', 'Astra 6.2 mini', 'astra'], ['gpt-6.2-sol', 'Sol 6.2', 'sol'],
+        ['gpt-6.1-terra', 'Terra 6.1', 'terra'], ['codex-auto-review', 'Auto review', 'other'],
+        ['gpt-9-future', 'gpt-9-future', 'other'], ['x', 'x', 'other']
+    ]) {
+        const result = context.usageModelLabel(model);
+        assert.deepEqual({...result}, {label, colour});
+        checks++;
+    }
+    run(`state={selectedProfileId:null};
+        const sampleStatus = {chatgpt:{modelUsage:{checkedAt:Date.parse('2026-10-22'),days:[{date:'2026-10-20',models:{'gpt-6-sol':2}},{date:'2026-10-21',models:{'gpt-6-luna':1}},{date:'2026-10-22',models:{}}]}},
+            claude:{usageBreakdown:{rows:[{name:'Claude Code',pct:100},{name:'Chats',pct:0}]},scopedWeekly:[{name:'Fable',pctUsed:3}]}};
+        getAllProfilesForGrid=()=>['Rob','Kevin','Kevin – LXDG-DCS','Unknown'].map((label,i)=>({id:String(i),label,syncStatus:sampleStatus}))`);
+    const rows = run('usageRowsFromProfiles().rows');
+    assert.deepEqual(Array.from(rows, r => [r.who, r.account]), [
+        ['GPT Rob','account1'], ['Claude Rob',undefined], ['GPT KB PRO','account2'], ['Claude Kevin',undefined],
+        ['GPT Kevin','account3'], ['Claude Kevin – LXDG-DCS',undefined], ['Unknown',undefined], ['Claude Unknown',undefined]
+    ]); checks++;
+    assert.deepEqual(Array.from(rows[0].week, d => d.total), [0,0,0,0,2,1,0]); checks++;
+    assert.deepEqual(Array.from(rows[0].totals, s => [s.label,s.value]), [['Sol 6',2],['Luna 6',1]]); checks++;
+    assert.equal(rows[1].surfaces.length, 2); assert.equal(rows[1].limits[0].pctUsed, 3); checks++;
+    const panel = {hidden:true, hasChildNodes:()=>true};
+    const button = {nextElementSibling:panel, setAttribute(key,value){this[key]=value}};
+    const container = {querySelector:()=>button['aria-expanded']==='true' ? button : null};
+    context.toggleUsageDetails(container, button, panel, rows[0]);
+    assert.equal(button['aria-expanded'],'true'); assert.equal(panel.hidden,false); checks++;
+    context.toggleUsageDetails(container, button, panel, rows[0]);
+    assert.equal(button['aria-expanded'],'false'); assert.equal(panel.hidden,true); checks++;
     check('Last day uses the latest day with usage',"(()=>{usageModelState.period='day';const r=usageRowsFromProfiles();return r.rows[0].segments.length===1&&r.rows[0].segments[0].label==='Luna 6'})()");
     check('Selected profile filters rows',"(()=>{state.selectedProfileId='b';return usageRowsFromProfiles().rows.length===0})()");
     context.emptySample={...data,SESSIES:[]};
@@ -134,6 +203,8 @@ async function main() {
     context.fetch=async()=>({ok:true,json:async()=>{throw new SyntaxError('Malformed')}});
     await run('initUsageByModel()');
     check('Malformed JSON clears snapshot','usageByModelData===null');
+    await checkSharedMetaConflict();
+    await checkDailyReport();
     await checkMonthlyReset();
     console.log('Usage state: '+checks+' offline checks passed.');
 }

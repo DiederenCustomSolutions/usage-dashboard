@@ -1,5 +1,5 @@
-const CACHE_NAME = 'usagedashboard-cache-v0.37.0';
-const APP_BUILD = '0.37.0';
+const CACHE_NAME = 'usagedashboard-cache-v0.38.0';
+const APP_BUILD = '0.38.0';
 
 // Beantwoord versievragen vanuit de page (voor de Build info-strip)
 self.addEventListener('message', (event) => {
@@ -13,8 +13,8 @@ self.addEventListener('message', (event) => {
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=0.37.0',
-  './app.js?v=0.37.0',
+  './style.css?v=0.38.0',
+  './app.js?v=0.38.0',
   './lib/chart.min.js',
   './lib/qrcode.min.js',
   './assets/usage-dashboard-logo.svg',
@@ -22,6 +22,8 @@ const ASSETS = [
   './assets/anthropic-ai-badge.svg',
   './assets/profile-avatar.svg'
 ];
+
+const VERSIONED_ASSETS = new Set(ASSETS.filter(asset => asset.includes("?v=")).map(asset => new URL(asset, self.location.href).href));
 
 // Install Event: Cache all essential assets
 self.addEventListener('install', (e) => {
@@ -98,7 +100,11 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     caches.match(e.request).then((cachedResponse) => {
       if (cachedResponse) {
-        // Fetch new version in background to update cache for next time
+        // A release gives these shell assets a new URL and a new named cache.
+        if (VERSIONED_ASSETS.has(e.request.url)) {
+          return cachedResponse;
+        }
+        // Unversioned assets can still change at the same URL.
         fetch(e.request).then((networkResponse) => {
           if (networkResponse.status === 200) {
             caches.open(CACHE_NAME).then((cache) => {
