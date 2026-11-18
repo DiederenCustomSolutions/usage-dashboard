@@ -4,6 +4,15 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.41.0] — 2026-11-18
+
+- New logo: orange usage ring with a thin reset-timer ring around it.
+- Calmer header: a green dot when synced; the version chip only shows when PCs are behind or an update waits; no "Data synced" bar (the toast says it).
+- Reports and Help placeholders removed from the tabs.
+- Phone: tabs move to a bottom bar.
+
+---
+
 ## [0.40.3] — 2026-11-18
 
 - Usage by model: the chosen day has a dashed frame and the picked block a solid ring; the picked block keeps its text and picking another block keeps the day open.
