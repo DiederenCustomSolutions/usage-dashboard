@@ -712,7 +712,8 @@ function chatgptUsageInPageFetch() {
                 monthly = {
                     pctRemainingMonthly: left(month),
                     pctRemaining: left(month),
-                    resetMonthly: isNaN(tsMonth) ? "" : "Reset " + day(tsMonth),
+                    resetMonthlyAbsoluteTs: Number.isFinite(tsMonth) ? tsMonth : undefined,
+                    resetMonthly: Number.isFinite(tsMonth) ? "Reset " + day(tsMonth) : "",
                     source: "api",
                     summary: `Via API: ${left(month)}% maandlimiet over.`
                 };
