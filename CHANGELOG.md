@@ -4,6 +4,11 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.42.2] — 2026-11-18
+
+- Reset line moves inside the 5h ring and the week donut.
+- Week donut larger and clear of the 5h ring.
+
 ## [0.42.1] — 2026-11-18
 
 - Week donut larger and further from the 5h ring.
