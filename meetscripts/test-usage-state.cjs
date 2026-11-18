@@ -109,6 +109,161 @@ async function checkDailyReport() {
     }
 }
 
+async function checkCodexLogSync() {
+    const script = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+    const start = script.indexOf('async function fetchCodexModelUsage(');
+    const end = script.indexOf('// Handle auto-tracked prompts', start);
+    assert.ok(start >= 0 && end > start);
+    const checkedAt = Date.parse('2026-11-03T00:01:00Z');
+    const report = {checkedAt, units: 'percent', days: []};
+    const config = {account: 'fixture-account', token: 'fixture-token'};
+    const row = {dag: '2026-11-03', model: 'gpt-6.2-sol', account: config.account, output: 6, input: 200, reasoning: 2};
+    const payload = {rijen: [row, {...row, output: 4}, {...row, account: 'unrelated', output: 400},
+        {...row, dag: '2026-10-28', output: 2}, {...row, dag: '2026-10-27', output: 100}]};
+    const saved = {lt_current_user: 'tester', lt_users: {tester: {}}};
+    const local = {
+        get(key, done) {
+            if (done) done(structuredClone(saved));
+            else return Promise.resolve({[key]: saved[key]});
+        },
+        set(update, done) { Object.assign(saved, structuredClone(update)); done?.(); }
+    };
+    const calls = [], timeouts = [];
+    let mode = 'ok', pushed, now = checkedAt;
+    const sandbox = vm.createContext({
+        Date: class extends Date { static now() { return now; } },
+        chrome: {storage: {local}}, broadcastStateUpdate() {},
+        pushUserDataToCloud: async user => { pushed = JSON.parse(JSON.stringify(user)); },
+        AbortSignal: {timeout(ms) {
+            timeouts.push(ms);
+            const controller = new AbortController();
+            if (mode === 'timeout') queueMicrotask(() => controller.abort());
+            return controller.signal;
+        }},
+        fetch: async (url, options) => {
+            calls.push({url, options});
+            if (mode === 'timeout') return new Promise((_, reject) =>
+                options.signal.addEventListener('abort', () => reject(new Error('timeout')), {once: true}));
+            if (mode === 'error') throw new Error('offline');
+            return {ok: mode !== 'http-error', json: async () => payload};
+        }
+    });
+    vm.runInContext(script.slice(start, end), sandbox);
+    const sync = pctRemaining5h => sandbox.handleTabSync('chatgpt', {pctRemaining5h, modelUsage: report});
+    await sync(80);
+    assert.equal(calls.length, 0);
+    assert.equal(pushed.syncStatus.chatgpt.pctRemaining5h, 80);
+    assert.equal(pushed.syncStatus.chatgpt.modelUsageLog, undefined);
+    checks++;
+
+    saved.ud_codexlog = config;
+    await sandbox.handleTabSync('codex', {pctRemainingMonthly: 75});
+    assert.equal(calls.length, 0);
+    await sync(70);
+    const request = new URL(calls[0].url);
+    assert.equal(request.origin + request.pathname, 'http://127.0.0.1:8787/v1/verbruik');
+    assert.deepEqual(Object.fromEntries(request.searchParams), {
+        van: '2026-10-28', tot: '2026-11-03', groep: 'dag,account,model', bron: 'codex'
+    });
+    assert.equal(calls[0].options.headers.Authorization, 'Bearer ' + config.token);
+    const expected = {days: [
+        {date: '2026-10-28', models: {'gpt-6.2-sol': 2}},
+        {date: '2026-11-03', models: {'gpt-6.2-sol': 10}}
+    ], units: 'tokens', source: 'codex-log', checkedAt};
+    assert.deepEqual(pushed.syncStatus.chatgpt.modelUsageLog, expected);
+    assert.ok(!JSON.stringify(pushed).includes('fixture-'));
+    checks++;
+
+    for (mode of ['error', 'http-error', 'timeout']) {
+        await sync(60);
+        assert.equal(pushed.syncStatus.chatgpt.pctRemaining5h, 60, mode);
+        assert.deepEqual(pushed.syncStatus.chatgpt.modelUsage, report, mode);
+        assert.deepEqual(pushed.syncStatus.chatgpt.modelUsageLog, expected, mode);
+        checks++;
+    }
+    assert.deepEqual(timeouts, [3000, 3000, 3000, 3000]);
+
+    // A slow earlier request must not roll back a newer limit when it finally completes.
+    const pending = Promise.withResolvers(), started = Promise.withResolvers();
+    sandbox.fetch = () => { started.resolve(); return pending.promise; };
+    const earlier = sync(50);
+    await started.promise;
+    now += 1;
+    sandbox.fetch = async () => ({ok: true, json: async () => payload});
+    await sync(40);
+    pending.resolve({ok: true, json: async () => payload});
+    await earlier;
+    assert.equal(saved.lt_users.tester.syncStatus.chatgpt.pctRemaining5h, 40);
+    assert.equal(pushed.syncStatus.chatgpt.pctRemaining5h, 40);
+    checks++;
+}
+
+function checkCodexLogDashboard() {
+    // Render the actual row and details so the source label, raw units and bar heights are checked together.
+    function element() {
+        const selectors = new Map();
+        return {children: [], style: {}, querySelectorAll: () => [], addEventListener() {}, setAttribute() {},
+            append(...items) { this.children.push(...items); }, appendChild(item) { this.append(item); },
+            querySelector(selector) {
+                if (!selectors.has(selector)) selectors.set(selector, element());
+                return selectors.get(selector);
+            }};
+    }
+    const tile = element();
+    const checkedAt = Date.parse('2026-11-18T12:00:00Z');
+    const report = {units: 'percent', checkedAt, days: [
+        {date: '2026-11-15', models: {'gpt-6.1-sol': 3, 'gpt-6.2-astra': 1}},
+        {date: '2026-11-18', models: {'gpt-6.1-sol': 0}}
+    ]};
+    const chatgpt = {modelUsage: report};
+    const ui = vm.createContext({
+        state: {}, getAllProfilesForGrid: () => [{id: 'one', label: 'Test', syncStatus: {chatgpt}}],
+        document: {getElementById: () => tile, createElement: element, querySelectorAll: () => []}
+    });
+    vm.runInContext(source.slice(usageStart, orderEnd) + ";expandedUsageRow = 'one|gpt'", ui);
+    const render = () => {
+        ui.renderUsageByModel();
+        return tile.querySelector('.um-rows').children.at(-1).children;
+    };
+    const legend = row => row.querySelector('.um-legend').children.map(el => el.textContent);
+    let [button, panel] = render();
+    assert.deepEqual(legend(button), ['No model data after 15 Nov']);
+    assert.equal(panel.children[1].textContent, '7-day totals');
+    checks++;
+
+    chatgpt.modelUsageLog = {checkedAt, units: 'tokens', source: 'codex-log', days: [
+        {date: '2026-11-11', models: {expired: 10}},
+        {date: '2026-11-15', models: {overlap: 9000000}},
+        {date: '2026-11-18', models: {'gpt-6.2-astra': 1200000}}
+    ]};
+    [button, panel] = render();
+    const item = ui.usageRowsFromProfiles().rows[0];
+    assert.deepEqual(Array.from(item.segments, s => [s.label, s.value]), [['Astra 6.2', 62.5], ['Sol 6.1', 37.5]]);
+    assert.deepEqual(legend(button), ['Codex log']);
+    const columns = panel.children[0].children;
+    assert.equal(columns.length, 7);
+    assert.equal(columns[3].children[0].title, '15 Nov · Sol 6.1 3%, Astra 6.2 1%');
+    assert.equal(columns[3].children[0].children[0].style.height, '75%');
+    assert.equal(columns[6].children.at(-1), '1.2M tok');
+    assert.equal(columns[6].children[0].title, '18 Nov · Codex log · Astra 6.2 1.2M tok');
+    assert.equal(panel.children[1].textContent, 'Average daily share');
+    assert.equal(panel.children[2].children[0].children.at(-1).textContent, '62.5%');
+    checks++;
+
+    vm.runInContext("usageModelState.period = 'day'", ui);
+    assert.equal(ui.usageRowsFromProfiles().rows[0].period, '18 Nov');
+    assert.equal(ui.usageRowsFromProfiles().rows[0].segments[0].value, 1200000);
+    report.days[0].stale = true;
+    assert.equal(ui.usageRowsFromProfiles().rows[0].week[3].total, 9000000);
+    delete chatgpt.modelUsage;
+    assert.equal(ui.usageRowsFromProfiles().rows[0].week[3].fromLog, true);
+    checks++;
+
+    chatgpt.modelUsageLog.checkedAt = Date.parse('2026-11-21T12:00:00Z');
+    assert.equal(ui.usageRowsFromProfiles().rows[0].stale, 'No model data after 18 Nov');
+    checks++;
+}
+
 async function checkSharedMetaConflict() {
     const start = source.indexOf('function cs2UpdateEnc(');
     const update = source.slice(start, source.indexOf('\n}', start) + 2);
@@ -206,6 +361,8 @@ async function main() {
     check('Malformed JSON clears snapshot','usageByModelData===null');
     await checkSharedMetaConflict();
     await checkDailyReport();
+    await checkCodexLogSync();
+    checkCodexLogDashboard();
     await checkMonthlyReset();
     console.log('Usage state: '+checks+' offline checks passed.');
 }

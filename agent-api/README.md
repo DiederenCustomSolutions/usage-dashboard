@@ -8,6 +8,8 @@ Het token staat in `~/.config/usage-api/token` en hoort in de header. Zet het no
 
 Op de agents-pc is het adres `http://127.0.0.1:8787`. Via het tailnet is het `http://100.70.217.45:8787`; de omgevingsvariabele `USAGE_API_URL` op Robs pc wijst daarheen. Andere adressen krijgen 403.
 
+Voor de tegel *Usage by model* kun je op de agents-pc elk meet-Chrome-profiel aan zijn Codex-account koppelen. Open in dat profiel via `chrome://extensions` de serviceworkerconsole van Usage Dashboard. Voer daar `await chrome.storage.local.set({ ud_codexlog: { token: "<lees-token>", account: "<account-id>" } })` uit met het lokale lees-token en de account-id voor dat profiel. De volgende ChatGPT-meting haalt de dagtotalen op. Met `await chrome.storage.local.remove("ud_codexlog")` schakel je het ophalen uit.
+
 **curl**
 ```bash
 curl -s -H "Authorization: Bearer $(cat ~/.config/usage-api/token)" http://127.0.0.1:8787/v1/usage
