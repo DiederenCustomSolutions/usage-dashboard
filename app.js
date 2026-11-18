@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.38.1";
+const APP_VERSION = "0.39.0";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5208,6 +5208,7 @@ const usagePlannerAccounts = new Map([
 ]);
 const usageDateFormat = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 const usageNumberFormat = new Intl.NumberFormat("en-GB", { maximumFractionDigits: 2 });
+const usageTokenFormat = new Intl.NumberFormat("en-GB", { notation: "compact", maximumFractionDigits: 1 });
 
 function validateUsageByModel(data) {
     return !!data && Number.isFinite(Date.parse(data.generated)) && Array.isArray(data.SESSIES) && data.SESSIES.length <= 100 &&
@@ -5261,21 +5262,43 @@ function usageModelLabel(model) {
 
 const usageSurfaceColours = new Map([["Claude Code", "opus"], ["Chats", "haiku"], ["Cowork", "sonnet"]]);
 
-function usageReportWeek(report) {
-    // Anchor the window to the saved report so reopening an old snapshot keeps its dates.
-    const dates = new Map(report.days.filter(d => d && /^\d{4}-\d{2}-\d{2}$/.test(d.date)).map(d => [d.date, d.models]));
-    const end = report.checkedAt || Date.parse([...dates.keys()].sort().pop());
-    if (!Number.isFinite(end)) return [];
+function usageReportWeek(report, log) {
+    const byDate = snapshot => {
+        const days = Array.isArray(snapshot?.days) ? snapshot.days : [];
+        return new Map(days.filter(day => day && /^\d{4}-\d{2}-\d{2}$/.test(day.date)).map(day => [day.date, day]));
+    };
+    const reportDays = byDate(report), logDays = byDate(log);
+    // Anchor the seven UTC days to the newest saved snapshot, including when reopened offline.
+    const snapshotEnd = (snapshot, days) => snapshot?.checkedAt || Date.parse([...days.keys()].sort().pop()) || 0;
+    const end = Math.max(snapshotEnd(report, reportDays), snapshotEnd(log, logDays));
+    if (!end || !Number.isFinite(end)) return [];
+    const entries = day => Object.entries(day?.models || {}).filter(([, value]) => Number.isFinite(value) && value > 0);
     return Array.from({ length: 7 }, (_, index) => {
         const date = new Date(end - (6 - index) * 86400000).toISOString().slice(0, 10);
-        const models = Object.entries(dates.get(date) || {}).filter(([, value]) => Number.isFinite(value) && value > 0);
-        return { date, models, total: models.reduce((sum, [, value]) => sum + value, 0) };
+        const reportDay = reportDays.get(date);
+        let models = entries(reportDay);
+        let fromLog = false;
+        if ((!models.length || reportDay?.stale) && logDays.has(date)) {
+            const logged = entries(logDays.get(date));
+            if (logged.length) {
+                models = logged;
+                fromLog = true;
+            }
+        }
+        return { date, models, fromLog, total: models.reduce((sum, [, value]) => sum + value, 0) };
     });
 }
 
-function usageModelTotals(days) {
+function usageModelTotals(days, averageShares = false) {
     const sums = new Map();
-    days.forEach(day => day.models.forEach(([model, value]) => sums.set(model, (sums.get(model) || 0) + value)));
+    const activeDays = days.filter(day => day.total > 0);
+    // For a week with log data, give every active day equal weight by averaging its model percentages.
+    for (const day of activeDays) {
+        for (const [model, value] of day.models) {
+            const share = averageShares ? value / day.total * 100 / activeDays.length : value;
+            sums.set(model, (sums.get(model) || 0) + share);
+        }
+    }
     return [...sums].sort((a, b) => b[1] - a[1]).map(([model, value]) => ({ ...usageModelLabel(model), value }));
 }
 
@@ -5285,23 +5308,26 @@ function usageRowsFromProfiles() {
     const profiles = getAllProfilesForGrid().filter(p => !state.selectedProfileId || p.id === state.selectedProfileId);
     profiles.forEach(profile => {
         const sync = profile.syncStatus || {};
-        const gpt = sync.chatgpt && sync.chatgpt.modelUsage;
-        if (gpt && Array.isArray(gpt.days) && (gpt.days.length || gpt.checkedAt)) {
-            const week = usageReportWeek(gpt);
+        const gpt = sync.chatgpt?.modelUsage;
+        const log = sync.chatgpt?.modelUsageLog;
+        if ([gpt, log].some(s => Array.isArray(s?.days) && (s.days.length || s.checkedAt))) {
+            const week = usageReportWeek(gpt, log);
             const last = week.filter(d => d.total > 0).pop();
-            const totals = usageModelTotals(week);
+            const hasLog = week.some(day => day.fromLog);
+            const checkedAt = Math.max(gpt?.checkedAt || 0, log?.checkedAt || 0);
+            const totals = usageModelTotals(week, hasLog);
             const daily = usageModelState.period === "day";
             rows.push({
                 key: tileKey(profile.id, "gpt"), provider: "gpt",
                 ...(usagePlannerAccounts.get(profile.label) || { who: profile.label }),
                 segments: daily ? usageModelTotals(last ? [last] : []) : totals,
                 period: daily ? (last ? usageDateFormat.format(Date.parse(last.date)) : "last day") : "7 days",
-                week, totals, units: gpt.units || "",
+                week, totals, hasLog, units: gpt?.units || "",
                 // OpenAI's report can stop updating (16-11-2026: frozen for days); say so instead of looking idle.
-                stale: last && gpt.checkedAt - Date.parse(last.date) - 86400000 > 24 * 3600000
+                stale: last && checkedAt - Date.parse(last.date) - 86400000 > 24 * 3600000
                     ? "No model data after " + usageDateFormat.format(Date.parse(last.date)) : ""
             });
-            measuredAt = Math.max(measuredAt, gpt.checkedAt || 0);
+            measuredAt = Math.max(measuredAt, checkedAt);
         }
         const claude = sync.claude && sync.claude.usageBreakdown;
         if (claude && Array.isArray(claude.rows)) {
@@ -5347,9 +5373,10 @@ function renderUsageDetails(panel, item) {
     }
     const unit = item.units === "percent" ? "%" : item.units && " " + item.units;
     const format = value => usageNumberFormat.format(value) + unit;
+    const tokens = value => usageTokenFormat.format(value) + " tok";
     const chart = document.createElement("div");
     chart.className = "um-week";
-    const peak = Math.max(0, ...item.week.map(day => day.total));
+    const peak = item.hasLog ? 0 : Math.max(0, ...item.week.map(day => day.total));
     item.week.forEach(day => {
         const column = document.createElement("div");
         const bar = document.createElement("div");
@@ -5358,21 +5385,23 @@ function renderUsageDetails(panel, item) {
             const { label, colour } = usageModelLabel(model);
             const segment = document.createElement("span");
             segment.style.background = `var(--um-${colour})`;
-            segment.style.height = value / peak * 100 + "%";
+            segment.style.height = value / (item.hasLog ? day.total : peak) * 100 + "%";
             bar.append(segment);
-            return label + " " + format(value);
+            return label + " " + (day.fromLog ? tokens(value) : format(value));
         });
         const date = usageDateFormat.format(Date.parse(day.date));
-        bar.title = date + " · " + (values.join(", ") || "No usage");
+        bar.title = date + (day.fromLog ? " · Codex log" : "") + " · " + (values.join(", ") || "No usage");
         bar.setAttribute("role", "img");
         bar.setAttribute("aria-label", bar.title);
         column.append(bar, date);
+        if (day.fromLog) column.append(document.createElement("br"), tokens(day.total));
         chart.append(column);
     });
     panel.append(chart);
     const title = document.createElement("strong");
-    title.textContent = "7-day totals";
-    panel.append(title, item.totals.length ? usageValueList(item.totals, format) : " · No usage");
+    title.textContent = item.hasLog ? "Average daily share" : "7-day totals";
+    const totalFormat = item.hasLog ? value => usageNumberFormat.format(value) + "%" : format;
+    panel.append(title, item.totals.length ? usageValueList(item.totals, totalFormat) : " · No usage");
 }
 
 function toggleUsageDetails(rows, button, panel, item) {
@@ -5438,6 +5467,7 @@ function renderUsageByModel() {
             }
         });
         if (item.stale) legend.appendChild(Object.assign(document.createElement("span"), { className: "um-stale", textContent: item.stale }));
+        if (item.hasLog) legend.appendChild(Object.assign(document.createElement("span"), { textContent: "Codex log" }));
         (item.limits || []).forEach(limit => legend.appendChild(Object.assign(document.createElement("span"), {
             textContent: limit.name + " limit " + Math.round(limit.pctUsed) + "% used"
         })));

@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.39.0] — 2026-11-18
+
+- Usage by model fills missing ChatGPT days from the measuring Chrome’s configured Codex log and labels those days with their output tokens.
+
+---
+
 ## [0.38.1] — 2026-11-18
 
 - **Usage by model flags a frozen ChatGPT report.** OpenAI's daily model report stopped counting after 16 Nov 2026 (all accounts, all models). A row now says "No model data after <date>" when the report is more than a day behind the measurement.

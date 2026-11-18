@@ -410,10 +410,45 @@ function fetchZaiUsage(rawToken) {
     });
 }
 
+async function fetchCodexModelUsage(checkedAt) {
+    try {
+        const { ud_codexlog: config } = await chrome.storage.local.get("ud_codexlog");
+        if (!config || typeof config.token !== "string" || !config.token.trim() ||
+            typeof config.account !== "string" || !config.account.trim()) return;
+        const van = new Date(checkedAt - 6 * 86400000).toISOString().slice(0, 10);
+        const tot = new Date(checkedAt).toISOString().slice(0, 10);
+        const response = await fetch(`http://127.0.0.1:8787/v1/verbruik?van=${van}&tot=${tot}&groep=dag,account,model&bron=codex`, {
+            headers: { Authorization: "Bearer " + config.token },
+            credentials: "omit", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(3000)
+        });
+        if (!response.ok) return;
+        const { rijen } = await response.json();
+        if (!Array.isArray(rijen)) return;
+        const byDate = new Map();
+        for (const row of rijen) {
+            if (!row || row.account !== config.account || !/^\d{4}-\d{2}-\d{2}$/.test(row.dag) ||
+                row.dag < van || row.dag > tot || typeof row.model !== "string" || !row.model ||
+                !Number.isFinite(row.output) || row.output <= 0) continue;
+            if (!byDate.has(row.dag)) byDate.set(row.dag, Object.create(null));
+            const models = byDate.get(row.dag);
+            models[row.model] = (models[row.model] || 0) + row.output;
+        }
+        const days = [...byDate.keys()].sort().map(date => ({ date, models: byDate.get(date) }));
+        return { days, units: "tokens", source: "codex-log", checkedAt };
+    } catch {
+        // The optional local service can be unavailable. Keep the ChatGPT measurement.
+    }
+}
+
 // Handle data scraped from settings/analytics tabs
-function handleTabSync(provider, data) {
+async function handleTabSync(provider, data) {
     // Registreer succesvolle sync zodat de scrape-fout-timer weet dat er data ontvangen is.
-    chrome.storage.local.set({ [`lt_sync_done_${provider}`]: Date.now() });
+    const receivedAt = Date.now();
+    chrome.storage.local.set({ [`lt_sync_done_${provider}`]: receivedAt });
+    if (provider === "chatgpt") {
+        const log = await fetchCodexModelUsage(data.modelUsage?.checkedAt || receivedAt);
+        if (log) data = { ...data, modelUsageLog: log };
+    }
 
     return new Promise((resolve, reject) => {
         chrome.storage.local.get(["lt_users", "lt_current_user"], (res) => {
@@ -430,8 +465,13 @@ function handleTabSync(provider, data) {
             
             // Save current timestamp and provider details
             const prevStatus = user.syncStatus[provider] || {};
+            // An overlapping ChatGPT measurement may have completed its local fetch first.
+            if (provider === "chatgpt" && prevStatus.lastSynced > receivedAt) {
+                resolve();
+                return;
+            }
             user.syncStatus[provider] = {
-                lastSynced: Date.now(),
+                lastSynced: receivedAt,
                 ...data
             };
             // De geïnjecteerde API-meting kent het accountlabel niet (die komt uit de DOM).
@@ -444,7 +484,7 @@ function handleTabSync(provider, data) {
                 user.syncStatus[provider].resetCredits = prevStatus.resetCredits;
             }
             // Same for the usage split (v0.30.0): a fallback scrape or a failed report keeps the last one.
-            for (const field of ["modelUsage", "usageBreakdown", "scopedWeekly"]) {
+            for (const field of ["modelUsage", "modelUsageLog", "usageBreakdown", "scopedWeekly"]) {
                 if (!user.syncStatus[provider][field] && prevStatus[field]) user.syncStatus[provider][field] = prevStatus[field];
             }
 
