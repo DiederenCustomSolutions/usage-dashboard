@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.38.0";
+const APP_VERSION = "0.38.1";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5296,7 +5296,10 @@ function usageRowsFromProfiles() {
                 ...(usagePlannerAccounts.get(profile.label) || { who: profile.label }),
                 segments: daily ? usageModelTotals(last ? [last] : []) : totals,
                 period: daily ? (last ? usageDateFormat.format(Date.parse(last.date)) : "last day") : "7 days",
-                week, totals, units: gpt.units || ""
+                week, totals, units: gpt.units || "",
+                // OpenAI's report can stop updating (16-11-2026: frozen for days); say so instead of looking idle.
+                stale: last && gpt.checkedAt - Date.parse(last.date) - 86400000 > 24 * 3600000
+                    ? "No model data after " + usageDateFormat.format(Date.parse(last.date)) : ""
             });
             measuredAt = Math.max(measuredAt, gpt.checkedAt || 0);
         }
@@ -5434,6 +5437,7 @@ function renderUsageByModel() {
                 legend.appendChild(entry);
             }
         });
+        if (item.stale) legend.appendChild(Object.assign(document.createElement("span"), { className: "um-stale", textContent: item.stale }));
         (item.limits || []).forEach(limit => legend.appendChild(Object.assign(document.createElement("span"), {
             textContent: limit.name + " limit " + Math.round(limit.pctUsed) + "% used"
         })));
