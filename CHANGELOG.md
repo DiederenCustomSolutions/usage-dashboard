@@ -4,6 +4,12 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.40.2] — 2026-11-18
+
+- Usage by model: the picked block gets a thin white ring instead of an amber frame.
+
+---
+
 ## [0.40.1] — 2026-11-18
 
 - Usage by model: hover or tap a block in a day or hour bar to see its model, amount and share; the tapped block is outlined. Hour axis labelled every 3 hours.
