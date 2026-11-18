@@ -282,7 +282,7 @@ async function readInname(req) {
     let body;
     try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
     catch { return { status: 400 }; }
-    if (!body || !["berichten", "codex", "klussen"].includes(body.tabel)
+    if (!body || !["berichten", "codex", "klussen", "codex_verwijderd"].includes(body.tabel)
         || !Array.isArray(body.rijen) || body.rijen.length < 1 || body.rijen.length > 5000
         || body.rijen.some(row => !row || typeof row !== "object" || Array.isArray(row)
             || typeof row.id !== "string" || !row.id.trim())

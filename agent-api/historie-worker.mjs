@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 const columns = {
     berichten: ["id", "tijd", "tijd_eind", "bron", "sessie_id", "titel", "project", "model", "input", "output", "cache_lees", "cache_schrijf_5m", "cache_schrijf_1u", "koud", "subagent", "prijs"],
     codex: ["id", "tijd", "account", "sessie_id", "werkmap", "model", "input", "cached_input", "output", "reasoning", "usd", "vijf_uur_pct", "week_pct"],
-    klussen: ["id", "klusmap", "account", "model", "start", "eind", "week_voor", "week_na", "vijf_uur_voor", "vijf_uur_na", "input", "output", "usd", "pr", "exitcode", "gelukt", "status"]
+    klussen: ["id", "klusmap", "account", "model", "start", "eind", "week_voor", "week_na", "vijf_uur_voor", "vijf_uur_na", "input", "output", "usd", "pr", "exitcode", "gelukt", "status", "effort"]
 };
 const backupMap = workerData.backupMap ?? path.join(os.homedir(), ".local", "share", "usage-api", "backup");
 const backupPattern = /^usage-(\d{4}-\d{2}-\d{2})\.sqlite$/;
@@ -49,6 +49,7 @@ try {
     db.function("klusnaam", { deterministic: true }, werkmap => werkmap === null ? null
         : String(werkmap).replace(/[\\/]+$/, "").split(/[\\/]/).at(-1));
     db.exec(`
+        BEGIN IMMEDIATE;
         CREATE TABLE IF NOT EXISTS metingen (
             id INTEGER PRIMARY KEY,
             gelezen_op TEXT,
@@ -85,14 +86,18 @@ try {
             klusmap TEXT, account TEXT, model TEXT, start TEXT, eind TEXT,
             week_voor REAL, week_na REAL, vijf_uur_voor REAL, vijf_uur_na REAL,
             input INTEGER, output INTEGER, usd REAL, pr TEXT, exitcode INTEGER,
-            gelukt INTEGER, status TEXT, ontvangen_op TEXT
+            gelukt INTEGER, status TEXT, ontvangen_op TEXT, effort TEXT
         );
         CREATE TABLE IF NOT EXISTS inname_log (
             rij INTEGER PRIMARY KEY, pc TEXT, tabel TEXT, tijd TEXT,
             ontvangen INTEGER, nieuw INTEGER, positie INTEGER
         );
-        PRAGMA user_version = 2;
     `);
+    if (!db.prepare("PRAGMA table_info(klussen)").all().some(column => column.name === "effort")) {
+        db.exec("ALTER TABLE klussen ADD COLUMN effort TEXT");
+    }
+    if (db.prepare("PRAGMA user_version").get().user_version < 3) db.exec("PRAGMA user_version = 3");
+    db.exec("COMMIT");
     try {
         const dates = fs.readdirSync(backupMap, { withFileTypes: true })
             .filter(e => e.isFile()).map(e => backupPattern.exec(e.name)?.[1]).filter(Boolean).sort();
@@ -102,6 +107,7 @@ try {
         const names = [...fields, "pc", "ontvangen_op", ...(table === "klussen" ? ["vingerafdruk"] : [])];
         return [table, db.prepare(`INSERT OR IGNORE INTO ${table} (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)];
     }));
+    const deleteCodex = db.prepare("DELETE FROM codex WHERE id = ? AND pc = ?");
     const fillCodexPrice = db.prepare("UPDATE codex SET usd = ? WHERE id = ? AND usd IS NULL");
     const audit = db.prepare("INSERT OR IGNORE INTO inname_log (pc, tabel, tijd, ontvangen, nieuw, positie) VALUES (?, ?, ?, ?, ?, ?)");
     const previousCodex = db.prepare("SELECT vijf_uur_pct, week_pct FROM metingen WHERE account = ? AND bron = 'codex' AND laatst_gezien < ? ORDER BY laatst_gezien DESC LIMIT 1");
@@ -128,7 +134,8 @@ try {
                 dailyBackup();
             } else if (message.type === "inname") {
                 const { tabel, pc, positie = null, rijen } = message;
-                if (rijen.some(row => columns[tabel].some(key => row[key] !== null && typeof row[key] === "object"))) {
+                const fields = tabel === "codex_verwijderd" ? ["id"] : columns[tabel];
+                if (rijen.some(row => fields.some(key => row[key] !== null && typeof row[key] === "object"))) {
                     parentPort.postMessage({ id: message.id, result: { ongeldig: true } });
                     return;
                 }
@@ -138,9 +145,17 @@ try {
                 db.exec("BEGIN");
                 try {
                     for (const row of rows) {
-                        const values = columns[tabel].map(key => row[key] ?? null);
+                        if (tabel === "codex_verwijderd") {
+                            nieuw += Number(deleteCodex.run(row.id, pc).changes);
+                            continue;
+                        }
+                        const values = fields.map(key => row[key] ?? null);
                         const args = [...values.map(v => typeof v === "boolean" ? Number(v) : v), pc, receivedAt];
-                        if (tabel === "klussen") args.push(createHash("sha256").update(JSON.stringify(values)).digest("hex"));
+                        if (tabel === "klussen") {
+                            // Keep the pre-effort fingerprint for snapshots without an effort value.
+                            const fingerprint = values.at(-1) === null ? values.slice(0, -1) : values;
+                            args.push(createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"));
+                        }
                         const changes = Number(ingest[tabel].run(...args).changes);
                         nieuw += changes;
                         // Price backfills do not count as new rows or generate limit measurements.
