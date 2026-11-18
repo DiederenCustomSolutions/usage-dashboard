@@ -269,6 +269,7 @@ function tokenOk(header, token) {
 }
 
 const RONDE_PROTOCOL = 3;
+const PRIJS_PROTOCOL = 4;
 
 // Bounded streaming: Content-Length is only an early check, never trusted as a limit.
 async function readInname(req) {
@@ -284,7 +285,8 @@ async function readInname(req) {
     let body;
     try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
     catch { return { status: 400 }; }
-    const protocol = body?.protocol === RONDE_PROTOCOL ? RONDE_PROTOCOL : 2;
+    const protocol = body?.protocol === PRIJS_PROTOCOL ? PRIJS_PROTOCOL
+        : body?.protocol === RONDE_PROTOCOL ? RONDE_PROTOCOL : 2;
     if (body?.protocol === protocol && body.tabel === "klussen"
         && Array.isArray(body.rijen) && body.rijen.length === 0 && body.positie === 0) {
         return { peiling: true, protocol };
@@ -366,7 +368,9 @@ export function createServer({ config, token, store, innameFile = config.inname_
                 const result = await store.inname?.({ tabel, pc, positie, rijen, protocol: body.protocol === protocol ? protocol : undefined });
                 if (!result || result.fout) return send(503, { fout: "historie niet beschikbaar" });
                 if (result.ongeldig) return send(400, { fout: "ongeldige inname" });
-                return send(200, { ok: true, protocol, tabel, ontvangen: rijen.length, nieuw: result.nieuw, positie, backup: result.backup });
+                return send(200, { ok: true, protocol, tabel, ontvangen: rijen.length, nieuw: result.nieuw, positie, backup: result.backup,
+                    ...(protocol === PRIJS_PROTOCOL && tabel === "codex" ? { prijs_bevestigd: result.prijs_bevestigd } : {}),
+                    ...(result.prijs_tokenverschil?.length ? { prijs_tokenverschil: result.prijs_tokenverschil } : {}) });
             }
             if (!tokenOk(req.headers.authorization, token)) return send(401, { fout: "token ontbreekt of klopt niet" });
             const now = clock();

@@ -721,35 +721,50 @@ test("ingestion: all tables are idempotent, whitelist fields, stamp pc and audit
     assert.equal(f.state.reads, 0);
 });
 
-test("ingestion: a Codex price backfill requires the same PC and model and changes only a missing price", async t => {
+test("ingestion: Codex price backfill checks PC, model and every priced token count", async t => {
     const f = await innameFixture(t);
-    const original = { id: "unpriced", tijd: "2026-11-10T10:00:00Z", account: "account1", model: "gpt-6.2-sol", input: 100, output: 20 };
-    const post = async (rijen, token) => {
-        const response = await f.post({ tabel: "codex", rijen }, token);
+    const original = { id: "unpriced", tijd: "2026-11-10T10:00:00Z", account: "account1", model: "gpt-6.2-sol",
+        input: 100, cached_input: 50, output: 20 };
+    const post = async (rijen, token, protocol = 4) => {
+        const response = await f.post({ tabel: "codex", rijen, protocol }, token);
         assert.equal(response.status, 200);
-        return (await response.json()).nieuw;
+        return response.json();
     };
     const stored = () => withDatabase(f.historyFile, db => ({ ...db.prepare("SELECT * FROM codex WHERE id = ?").get(original.id) }));
     const prices = async () => (await (await f.get("/v1/verbruik?van=2026-11-10&tot=2026-11-10&groep=model")).json()).rijen[0];
-    assert.equal(await post([original]), 1);
+    assert.equal((await post([original])).nieuw, 1);
     const before = await stored();
     assert.equal(before.usd, null);
     const unpriced = await prices();
     assert.equal(unpriced.usd, null);
     assert.equal(unpriced.usd_bekend, 0);
     assert.equal(unpriced.regels_zonder_prijs, 1);
-    assert.equal(await post([{ ...original, usd: null }]), 0);
+    assert.equal((await post([{ ...original, usd: null }])).nieuw, 0);
     assert.deepEqual(await stored(), before);
-    const repriced = { ...original, tijd: "2026-11-11T10:00:00Z", account: "account2", input: 999, week_pct: 80, usd: 0.25 };
-    assert.equal(await post([repriced], OTHER_PC_TOKEN), 0);
-    assert.equal(await post([{ ...repriced, model: "other-model" }]), 0);
+    const repriced = { ...original, tijd: "2026-11-11T10:00:00Z", account: "account2", week_pct: 80, usd: 0.25 };
+    assert.deepEqual((await post([repriced], OTHER_PC_TOKEN)).prijs_bevestigd, []);
+    assert.deepEqual((await post([{ ...repriced, model: "other-model" }])).prijs_bevestigd, []);
+    for (const field of ["input", "cached_input", "output"]) {
+        const rejected = await post([{ ...repriced, [field]: 999 }]);
+        assert.deepEqual(rejected.prijs_tokenverschil, [original.id], field);
+        assert.deepEqual(rejected.prijs_bevestigd, []);
+    }
+    const legacy = await post([{ ...repriced, input: 999 }], undefined, 2);
+    assert.equal(legacy.protocol, 2);
+    assert.deepEqual(legacy.prijs_tokenverschil, [original.id]);
     assert.deepEqual(await stored(), before);
-    assert.equal(await post([repriced]), 0);
+    const confirmed = await post([repriced]);
+    assert.equal(confirmed.nieuw, 0);
+    assert.deepEqual(confirmed.prijs_bevestigd, [original.id]);
     assert.deepEqual(await stored(), { ...before, usd: 0.25 });
-    assert.equal(await post([repriced, { ...repriced, usd: 1.5 }, { ...repriced, usd: null }]), 0);
+    assert.deepEqual((await post([repriced])).prijs_bevestigd, [original.id]);
+    assert.deepEqual((await post([{ ...repriced, usd: 1.5 }])).prijs_bevestigd, []);
     assert.deepEqual(await stored(), { ...before, usd: 0.25 });
     assert.deepEqual(await f.store.verloop(), { metingen: [] });
     assert.deepEqual(await prices(), { ...unpriced, usd: 0.25, usd_bekend: 0.25, regels_zonder_prijs: 0 });
+    const newRow = await post([{ ...original, id: "new-price", usd: 0 }]);
+    assert.equal(newRow.nieuw, 1);
+    assert.deepEqual(newRow.prijs_bevestigd, ["new-price"]);
 });
 
 test("ingestion: waits for a short SQLite write lock and commits once", async t => {
@@ -827,6 +842,9 @@ test("inname protocol probe confirms effort support without writing an ingestion
     const roundProbe = await f.post({ ...body, protocol: 3 });
     assert.equal(roundProbe.status, 200);
     assert.deepEqual(await roundProbe.json(), { ok: true, protocol: 3, nieuw: 0, backup: null });
+    const priceProbe = await f.post({ ...body, protocol: 4 });
+    assert.equal(priceProbe.status, 200);
+    assert.deepEqual(await priceProbe.json(), { ok: true, protocol: 4, nieuw: 0, backup: null });
     await f.store.verloop();
     await withDatabase(f.historyFile, db => assert.equal(db.prepare("SELECT COUNT(*) AS n FROM inname_log").get().n, 0));
 });
@@ -877,6 +895,27 @@ test("codex measurements: sort, deduplicate percentages, preserve week reset zer
     ] });
     assert.equal((await f.store.verloop({ account: "account1" })).metingen.length, 4);
     assert.equal((await f.store.verloop({ account: "account2" })).metingen.length, 1);
+});
+
+test("HTTP verloop: a late Codex limit repair restores the next suppressed reading", async t => {
+    const f = await innameFixture(t);
+    const at = minute => `2026-11-10T10:${minute}:00Z`;
+    const base = { account: "account1", week_pct: 25 };
+    const first = { ...base, id: "first", tijd: at("00") };
+    const after = { ...base, id: "after", tijd: at("02") };
+    const same = { ...base, id: "same", tijd: at("03") };
+    const noReading = { ...base, id: "no-reading", tijd: "2026-11-10T10:01:30Z", week_pct: null };
+    const correction = { ...base, id: "repair", tijd: at("01"), week_pct: 0, limietcorrectie: true,
+        input: 0, cached_input: 0, output: 0, reasoning: 0, usd: 0 };
+    assert.equal((await f.post({ tabel: "codex", rijen: [first, after, same, noReading] })).status, 200);
+    const verloop = async () => (await (await f.get("/v1/verloop?bron=codex&account=account1")).json())
+        .metingen.map(row => [row.laatst_gezien, row.week_pct]);
+    assert.deepEqual(await verloop(), [[first.tijd, 25]]);
+    const body = { tabel: "codex", protocol: 2, rijen: [correction] };
+    for (const nieuw of [1, 0]) {
+        assert.equal((await (await f.post(body)).json()).nieuw, nieuw);
+        assert.deepEqual(await verloop(), [[after.tijd, 25], [correction.tijd, 0], [first.tijd, 25]]);
+    }
 });
 
 test("ingestion auth and validation: fail whole invalid requests, block LAN and preserve GET", async t => {
@@ -1271,6 +1310,24 @@ test("HTTP verbruik: groep uur and sessie add hourly and per-session figures, ad
     assert.deepEqual(Object.keys(plain.rijen[0]), ["dag", "bron", "regels", "input", "output", "cache_lees", "cache_schrijf", "usd", "usd_bekend", "regels_zonder_prijs"]);
     for (const params of ["groep=dag&uurstart=2026-11-10T09:30:00Z", "groep=uur&uurstart=nu", "groep=uur&uurstart=2026-11-10", "groep=uur,pc"]) {
         assert.equal((await f.get(`${base}&${params}`)).status, 400, params);
+    }
+});
+
+test("HTTP verbruik: subgroup costs are null only when an applicable row is unpriced", async t => {
+    const f = await innameFixture(t);
+    const rows = [
+        { id: "both-known", tijd: "2026-11-10T10:00:00Z", sessie_id: "both", input: 150001, subagent: 1, prijs: 1 },
+        { id: "both-missing", tijd: "2026-11-10T10:01:00Z", sessie_id: "both", input: 150001, subagent: 1 },
+        { id: "ordinary-missing", tijd: "2026-11-10T11:00:00Z", sessie_id: "other", input: 150000 },
+        { id: "large-known", tijd: "2026-11-10T11:01:00Z", sessie_id: "other", input: 150001, prijs: 2 }
+    ];
+    assert.equal((await f.post({ tabel: "berichten", rijen: rows })).status, 200);
+    for (const groep of ["uur", "sessie"]) {
+        const { rijen } = await (await f.get(`/v1/verbruik?van=2026-11-10&tot=2026-11-10&groep=${groep}`)).json();
+        assert.deepEqual(rijen.map(row => [row.usd, row.groot_usd, row.groot_usd_bekend, row.subagent_usd, row.subagent_usd_bekend]), [
+            [null, null, 1, null, 1],
+            [null, 2, 2, 0, 0]
+        ]);
     }
 });
 

@@ -47,6 +47,10 @@ On Firebase the document is split into small nodes under `profiles/<binId>/` so 
 
 The whole payload is **E2E encrypted**; without the pairing key (shared only via QR/invite link) the cloud data is unreadable.
 
+## Central usage history
+
+The usage API stores Codex usage, job rounds, limits and costs. The PC keeps repriced rows queued until the server confirms the individual prices via protocol 4. After upgrading the server, run `verbruik-inname.py --alles --herlever-prijzen` once on the PC to replay prices for rows it previously sent. See the [usage API documentation](agent-api/README.md) for the ingestion contract, backup recovery and history fields.
+
 ## Install (Chrome extension)
 
 1. `chrome://extensions` → enable **Developer mode**.
