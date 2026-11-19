@@ -1,5 +1,5 @@
-const CACHE_NAME = 'usagedashboard-cache-v0.43.6';
-const APP_BUILD = '0.43.6';
+const CACHE_NAME = 'usagedashboard-cache-v0.43.7';
+const APP_BUILD = '0.43.7';
 
 // Beantwoord versievragen vanuit de page (voor de Build info-strip)
 self.addEventListener('message', (event) => {
@@ -13,8 +13,8 @@ self.addEventListener('message', (event) => {
 const ASSETS = [
   './',
   './index.html',
-  './style.css?v=0.43.6',
-  './app.js?v=0.43.6',
+  './style.css?v=0.43.7',
+  './app.js?v=0.43.7',
   './lib/chart.min.js',
   './lib/qrcode.min.js',
   './assets/usage-dashboard-logo.svg',

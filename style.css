@@ -3258,3 +3258,6 @@ a.psm-manage-btn { text-decoration: none; }
 .week-donut__val span { font-family: 'Outfit', sans-serif; font-size: 1.05rem; font-weight: 700; color: #fff; }
 .week-donut__val small { font-size: 0.6rem; color: var(--text-muted); margin-top: 1px; }.progress-visualization:has(.week-donut) { margin-bottom: 56px; }
 .progress-visualization:has(.week-donut) .progress-ring-container { transform: translateX(-30px); }
+
+.device-act { background: none; border: 0; padding: 0 3px; color: var(--text-muted); cursor: pointer; font-size: 0.7rem; opacity: 0.6; }
+.device-act:hover { opacity: 1; }
