@@ -1,4 +1,4 @@
-# release.ps1
+﻿# release.ps1
 # Publishes a release that is ready locally (bump-version.ps1 + CHANGELOG + commit + tag) and
 # updates the measuring Chromes on agents-pc right away. The release is the trigger: nothing
 # polls GitHub on a timer anywhere (Rob, 04-10-2026: work only starts when something triggers it).
@@ -35,6 +35,16 @@ $head = (git rev-parse HEAD).Trim()
 $tagCommit = (git rev-list -n 1 "v$version" 2>$null)
 if (-not $tagCommit -or $tagCommit.Trim() -ne $head) {
     Fail "tag v$version ontbreekt of staat niet op de laatste commit (git tag v$version)."
+}
+
+# Icon changed but the manifest icon URLs did not: installed apps (Android WebAPK) keep the old icon.
+$prevTag = (git describe --tags --abbrev=0 "HEAD^" 2>$null)
+if ($prevTag) {
+    $iconsChanged = git diff --name-only $prevTag HEAD -- assets/icon-192.png assets/icon-512.png assets/icon-512-maskable.png assets/usage-dashboard-logo.svg assets/icon-maskable.svg
+    $manifestIcons = git diff $prevTag HEAD -- manifest.webmanifest | Select-String '^\+.*"src"'
+    if ($iconsChanged -and -not $manifestIcons) {
+        Fail "icoon gewijzigd sinds $prevTag, maar de icoon-URL's in manifest.webmanifest niet. Verhoog ?v= in manifest.webmanifest (en apple-touch-icon in index.html)."
+    }
 }
 
 $remoteTags = git ls-remote --tags origin | ForEach-Object { ($_ -split "refs/tags/")[1] -replace '\^\{\}$', '' } | Sort-Object -Unique
