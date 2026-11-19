@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.43.5] — 2026-11-19
+
+- App icon URLs changed so installed phone apps pick up the new icon.
+
 ## [0.43.4] — 2026-11-19
 
 - Usage by model: a rise in the week or 5h limit without model data shows as "Not in log" instead of "No usage".
