@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.43.6";
+const APP_VERSION = "0.43.7";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -158,7 +158,7 @@ function renderSyncDevices() {
     };
 
     const thisDevice = latest => row(
-        `<i class="fa-solid fa-${DB.isExtension ? "desktop" : "mobile-screen-button"}"></i> This device`,
+        `<i class="fa-solid fa-${DB.isExtension || !/^Phone/.test(pwaDeviceLabel()) ? "desktop" : "mobile-screen-button"}"></i> This device`,
         runningVersion(), "now", latest
     );
 
@@ -181,8 +181,14 @@ function renderSyncDevices() {
             Object.keys(clients).forEach((cid) => {
                 if (cid === pwaDeviceId()) return;   // dat is dit toestel zelf
                 const c = clients[cid] || {};
-                rows.push(row(`<i class="fa-solid fa-mobile-screen-button"></i> ${escapeHtmlSafe(c.label || cid)}`, c.appVersion, c.lastSeen ? formatTimeAgo(c.lastSeen) : "—", latest));
+                const name = `<i class="fa-solid fa-${/^Phone/.test(c.label || "") ? "mobile-screen-button" : "desktop"}"></i> ${escapeHtmlSafe(c.name || c.label || cid)}`
+                    + ` <button type="button" class="device-act" data-act="rename" data-cid="${escapeHtmlSafe(cid)}" title="Rename"><i class="fa-solid fa-pen"></i></button>`
+                    + ` <button type="button" class="device-act" data-act="remove" data-cid="${escapeHtmlSafe(cid)}" title="Remove"><i class="fa-solid fa-xmark"></i></button>`;
+                rows.push(row(name, c.appVersion, c.lastSeen ? formatTimeAgo(c.lastSeen) : "—", latest));
             });
+            const own = clients[pwaDeviceId()];
+            if (own && own.name) rows[0] = rows[0].replace("This device", `This device · ${escapeHtmlSafe(own.name)}`);
+            if (own) rows[0] = rows[0].replace("This device", `This device <button type="button" class="device-act" data-act="rename" data-cid="${escapeHtmlSafe(pwaDeviceId())}" title="Rename"><i class="fa-solid fa-pen"></i></button>`);
 
             const anyOutdated = devices.some(d => deviceVersionBehind(d?.appVersion, latest));
             if (anyOutdated) {
@@ -190,8 +196,33 @@ function renderSyncDevices() {
                     <i class="fa-solid fa-circle-info"></i> Reopen outdated phones. Update outdated PCs.</p>`);
             }
             slot.innerHTML = rows.join("");
+            wireDeviceActions(slot, cfg, clients);
         }).catch(() => { slot.innerHTML = thisDevice(newestKnownVersion([])) + `<p class="desc" style="margin-top:6px;">Could not read the other devices.</p>`; });
     });
+}
+
+// Rename or remove a paired phone/browser in meta.clients (read-modify-write).
+function wireDeviceActions(slot, cfg, clients) {
+    slot.querySelectorAll(".device-act").forEach((b) => b.addEventListener("click", () => {
+        const cid = b.dataset.cid;
+        const c = clients[cid] || {};
+        let name = null;
+        if (b.dataset.act === "rename") {
+            name = prompt("Device name", c.name || c.label || "");
+            if (name === null) return;
+            name = name.trim().slice(0, 40);
+        } else if (!confirm(`Remove ${c.name || c.label || cid}?`)) {
+            return;
+        }
+        cs2UpdateEnc(cfg, "meta", (m) => {
+            if (!m.clients || !m.clients[cid]) return m;
+            if (b.dataset.act === "remove") delete m.clients[cid];
+            else if (name) m.clients[cid].name = name;
+            else delete m.clients[cid].name;
+            return m;
+        }).then(() => renderSyncDevices())
+          .catch(() => showToast(`<i class="fa-solid fa-circle-exclamation"></i> Could not save.`));
+    }));
 }
 
 // 1. DUAL STORAGE INTERFACE (Adapts automatically to Chrome Extension or Standard Browser environments)
@@ -6591,6 +6622,8 @@ function pwaDeviceLabel() {
     const ua = navigator.userAgent || "";
     if (/Android/i.test(ua))          return "Phone (Android)";
     if (/iPhone|iPad|iPod/i.test(ua)) return "Phone (iOS)";
+    if (/Windows/i.test(ua))          return "PC (Windows)";
+    if (/Macintosh/i.test(ua))        return "Mac";
     return "Browser";
 }
 
@@ -6603,7 +6636,8 @@ function publishPwaPresence(force = false) {
 
     cs2UpdateEnc(cfg, "meta", (m) => {
         if (!m.clients) m.clients = {};
-        m.clients[pwaDeviceId()] = { label: pwaDeviceLabel(), appVersion: APP_VERSION, lastSeen: now };
+        // Keep a name given in Settings → Sync.
+        m.clients[pwaDeviceId()] = { ...(m.clients[pwaDeviceId()] || {}), label: pwaDeviceLabel(), appVersion: APP_VERSION, lastSeen: now };
         // Apparaten die een week niet gezien zijn opruimen, anders groeit meta ongemerkt.
         Object.keys(m.clients).forEach((id) => {
             if (now - (m.clients[id].lastSeen || 0) > 7 * 24 * 60 * 60 * 1000) delete m.clients[id];
