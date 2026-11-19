@@ -3171,6 +3171,8 @@ a.psm-manage-btn { text-decoration: none; }
 .um-hour-now .um-hour-bar {box-shadow:inset 0 2px 0 var(--um-fg)}
 .um-hour-later .um-hour-bar {background:transparent;box-shadow:inset 0 0 0 1px var(--um-line)}
 .um-hour-bar {height:42px;border-radius:2px}
+.um-day-bar.um-gap,.um-hour-bar.um-gap {border-bottom:2px solid var(--um-warn)}
+.um-gap-note {color:var(--um-warn)}
 .um-tip {min-height:1.4em;margin:-6px 0 8px;color:var(--um-fg);font-size:12px;font-variant-numeric:tabular-nums}
 .um-day-bar > span:hover,.um-hour-bar > span:hover {filter:brightness(1.25)}
 .um-values {list-style:none;padding:0;margin:4px 0 0;display:grid;gap:3px;max-width:480px}

@@ -285,6 +285,30 @@ async function checkCodexLogSync() {
     assert.equal(saved.lt_users.tester.syncStatus.chatgpt.pctRemaining5h, 40);
     assert.equal(pushed.syncStatus.chatgpt.pctRemaining5h, 40);
     checks++;
+
+    const beforeNight = Date.parse('2026-11-18T16:00:00Z');
+    const afterNight = Date.parse('2026-11-19T07:48:00Z');
+    const resetWeeklyAbsoluteTs = Date.parse('2026-11-25T08:42:00Z');
+    const reset5hAbsoluteTs = afterNight + 3600000;
+    const limits = (pctRemainingWeekly, pctRemaining5h, resets = {}) => sandbox.handleTabSync('chatgpt', {
+        pctRemainingWeekly, pctRemaining5h, resetWeeklyAbsoluteTs, reset5hAbsoluteTs, ...resets
+    });
+    now = beforeNight;
+    await limits(99, null);
+    now = afterNight;
+    await limits(94, 70);
+    assert.deepEqual(pushed.syncStatus.chatgpt.modelUsageLimitRises, [{from: beforeNight, to: afterNight, week: 5}]);
+    now += 60000;
+    await limits(94, 65);
+    now += 60000;
+    await limits(94, 64, {reset5hAbsoluteTs: reset5hAbsoluteTs + 5 * 3600000});
+    assert.deepEqual(pushed.syncStatus.chatgpt.modelUsageLimitRises, [
+        {from: beforeNight, to: afterNight, week: 5}, {from: afterNight, to: afterNight + 60000, fiveHour: 5}
+    ], 'A new reset window must never be compared with the previous window');
+    now += 8 * 86400000;
+    await limits(99, null, {resetWeeklyAbsoluteTs: resetWeeklyAbsoluteTs + 7 * 86400000});
+    assert.deepEqual(pushed.syncStatus.chatgpt.modelUsageLimitRises, []);
+    checks += 3;
 }
 
 function checkCodexLogDashboard() {
@@ -409,6 +433,48 @@ function checkCodexLogDashboard() {
     assert.deepEqual([spring[1].get('sol'), spring[2].size, spring[3].get('sol')], [2, 0, 3]);
     checks++;
 
+    const beforeGap = {...chatgpt};
+    const from = new Date(2026, 10, 18, 17).getTime();
+    const to = new Date(2026, 10, 19, 8, 48).getTime();
+    const gap = {from, to, week: 5};
+    Object.assign(chatgpt, {
+        lastSynced: to, pctRemainingWeekly: 94, modelUsageLimitRises: [gap],
+        modelUsageLog: {...chatgpt.modelUsageLog, checkedAt: to}
+    });
+    vm.runInContext("selectedUsageDate = undefined; usageModelState.period = 'day'", ui);
+    [button, panel] = render();
+    const gapDays = panel.children[0].children.map(column => column.children[0]);
+    const gapBars = () => panel.children[1].children[0].children.map(column => column.children[0]);
+    assert.equal(button.querySelector('.um-tot').textContent, '19 Nov');
+    assert.equal(button.querySelector('.um-stack').children[0].textContent, 'Not in log: +5% week');
+    assert.equal(gapDays[6].title, '19 Nov · Not in log: +5% week');
+    assert.equal(panel.children[4].children[0].textContent, 'Not in log: +5% week');
+    assert.equal(gapBars()[2].title, '02:00 · Not in log: +5% week');
+    assert.equal(gapBars()[9].title, '09:00 · Not measured yet');
+    gapDays[5].click();
+    assert.match(gapDays[5].title, /Astra 6.2 1.2M tok · Not in log: \+5% week/);
+    assert.equal(gapBars()[17].title, '17:00 · Not in log: +5% week');
+    assert.match(gapBars()[14].title, /Astra 6.2 1.2M tok/);
+    checks++;
+
+    const lateLog = {t: new Date(2026, 10, 19, 2).toISOString(), models: {'gpt-6.2-sol': 12}};
+    chatgpt.modelUsageLog.hours = [...chatgpt.modelUsageLog.hours, lateLog];
+    assert.equal(ui.usageModelGaps(chatgpt).length, 0, 'Late Codex data covers the measured interval');
+    chatgpt.modelUsageLog.hours.pop();
+    chatgpt.modelUsage = {...report, days: [...report.days, {date: '2026-11-19', models: {'gpt-6.2-sol': 12}}]};
+    assert.equal(ui.usageModelGaps(chatgpt).length, 0, 'A populated OpenAI report covers the day');
+    chatgpt.modelUsage = undefined;
+    chatgpt.modelUsageLog = undefined;
+    assert.equal(ui.usageModelGaps(chatgpt).length, 1, 'Stored rises work without a report or local API');
+    chatgpt.modelUsageLimitRises = [];
+    [button, panel] = render();
+    assert.equal(button.querySelector('.um-stack').children[0].textContent, 'Week used: 6%');
+    assert.equal(panel.children[4].children[0], 'No model data');
+    checks += 4;
+
+    for (const key of Object.keys(chatgpt)) delete chatgpt[key];
+    Object.assign(chatgpt, beforeGap);
+    vm.runInContext("selectedUsageDate = undefined", ui);
     vm.runInContext("usageModelState.period = 'day'", ui);
     assert.equal(ui.usageRowsFromProfiles().rows[0].period, '18 Nov');
     assert.equal(ui.usageRowsFromProfiles().rows[0].segments[0].value, 1200000);

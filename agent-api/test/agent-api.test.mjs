@@ -440,8 +440,8 @@ function historyFixture(t, overrides = {}) {
     };
     const historyFile = path.join(dir, "historie.sqlite");
     const stores = [];
-    const makeStore = (file = historyFile) => {
-        const store = createStore(cfg, secrets, { fetchImpl, historyFile: file });
+    const makeStore = (file = historyFile, cacheFile) => {
+        const store = createStore(cfg, secrets, { fetchImpl, historyFile: file, cacheFile });
         stores.push(store);
         t.after(() => store.close());
         return store;
@@ -496,11 +496,18 @@ test("history: one row per new account measurement, persistent and append-only",
 
 test("history: fresh stores its initial read and every existing refresh read", async t => {
     const f = historyFixture(t, { ververs_lees_ms: 1, ververs_wacht_s: 1 });
-    const store = f.makeStore(); f.cleanup();
+    const cacheFile = path.join(f.dir, "cache.json");
+    const store = f.makeStore(f.historyFile, cacheFile); f.cleanup();
     const now = Date.now();
-    f.state.profiles = profiles({ seen: now - 1000 });
+    f.state.profiles = profiles({ seen: now });
+    const rob = config.accounts.find(account => account.id === "account1").profiel;
+    f.state.profiles[rob].syncStatus.chatgpt.lastSynced = now - 1000;
     f.state.onRead = () => {
-        if (f.state.reads === 3) f.state.profiles = profiles({ seen: now, robWeek: 35 });
+        if (f.state.reads === 3) {
+            const status = f.state.profiles[rob].syncStatus.chatgpt;
+            status.lastSynced = now;
+            status.pctRemainingWeekly = 65;
+        }
     };
     const usage = await store.usage(now, { ververs: true });
     assert.equal(usage.ververst, true);
@@ -508,8 +515,26 @@ test("history: fresh stores its initial read and every existing refresh read", a
     assert.equal(rows.length, 2, "the unchanged intermediate refresh read is deduplicated");
     assert.equal(rows[0].week_pct, 35);
     assert.equal(rows[1].week_pct, 30);
+    assert.equal(JSON.parse(fs.readFileSync(cacheFile, "utf8")).profiles[rob].syncStatus.chatgpt.pctRemainingWeekly, 65);
     assert.equal(f.state.reads, 3);
     assert.equal(f.state.metaReads, 1);
+});
+
+test("history: manual refresh persists a newer initial read even without a subsequent measurement", async t => {
+    const f = historyFixture(t, { ververs_wacht_s: 0 });
+    const cacheFile = path.join(f.dir, "cache.json");
+    const store = f.makeStore(f.historyFile, cacheFile); f.cleanup();
+    await store.usage(NOW);
+    const cached = () => JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+    assert.equal(cached().readAt, NOW);
+    const now = Date.now();
+    f.state.profiles = profiles({ seen: now, kb: 6 });
+    const usage = await store.usage(now, { ververs: true });
+    assert.equal(usage.ververst, false);
+    assert.equal(usage.accounts.find(account => account.id === "account2").week.gebruikt_pct, 6);
+    assert.deepEqual(cached().profiles, f.state.profiles);
+    assert.equal((await store.verloop({ account: "account2" })).metingen[0].week_pct, 6);
+    assert.equal(f.state.reads, 2);
 });
 
 test("history: reset credits preserve count, zero, unknown items and expiry dates", async t => {
@@ -603,7 +628,7 @@ test("history: unavailable history and disk cache do not fabricate measurements"
     assert.deepEqual(await without.verloop(), { metingen: [], fout: "geen historie" });
 });
 
-test("history: a locked database write cannot break or hold up usage", async t => {
+test("history: a locked measurement write keeps usage live and the worker recovers", async t => {
     const f = historyFixture(t);
     const store = f.makeStore(); f.cleanup();
     await store.usage(NOW);
@@ -611,16 +636,17 @@ test("history: a locked database write cannot break or hold up usage", async t =
     const { DatabaseSync } = await import("node:sqlite");
     const lock = new DatabaseSync(f.historyFile);
     try {
-        lock.exec("BEGIN EXCLUSIVE");
+        lock.exec("BEGIN IMMEDIATE");
         f.state.profiles = profiles({ seen: NOW });
         const started = Date.now();
         const usage = await store.usage(NOW + 1);
         assert.equal(ids(usage), "account1,account2,account3,claude");
         assert.equal(usage.accounts[0].laatst_gezien, new Date(NOW).toISOString());
         assert.ok(Date.now() - started < 2000);
-        assert.deepEqual(await store.verloop(), { metingen: [], fout: "geen historie" });
+        assert.equal((await store.verloop()).metingen.length, 4, "the busy transaction was rolled back");
     } finally { lock.exec("ROLLBACK"); lock.close(); }
     assert.equal(ids(await store.usage(NOW + 2)), "account1,account2,account3,claude");
+    assert.equal((await store.verloop()).metingen.length, 8, "the next read persisted the measurements");
 });
 
 test("history config paths resolve beside config like cache paths", t => {
