@@ -19,7 +19,6 @@ const ASSETS = [
   './lib/qrcode.min.js',
   './assets/usage-dashboard-logo.svg',
   './assets/icon-small.svg',
-  './assets/icon-header.svg',
   './assets/icon-180.png',
   './assets/icon-192.png',
   './assets/openai-badge.svg',

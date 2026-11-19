@@ -6,7 +6,7 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ## [0.43.3] — 2026-11-19
 
-- Header logo larger and bolder, easier to read.
+- Logo easier to read: header logo larger, bigger U.
 
 ## [0.43.2] — 2026-11-18
 
