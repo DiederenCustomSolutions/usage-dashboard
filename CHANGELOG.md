@@ -4,6 +4,10 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.43.8] — 2026-11-19
+- Toestelnaam alleen op het toestel zelf: Settings → Sync → Device name, standaard het telefoonmodel of "PC (Windows)".
+- Andere toestellen: geen potlood meer; het kruisje alleen bij een verouderd toestel.
+
 ## [0.43.7] — 2026-11-19
 - Versions & devices: telefoons en browsers een naam geven (potlood) of weghalen (kruisje).
 - Een geïnstalleerde app op Windows/Mac heet "PC (Windows)"/"Mac" en krijgt een pc-icoon.

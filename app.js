@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.43.7";
+const APP_VERSION = "0.43.8";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -182,13 +182,12 @@ function renderSyncDevices() {
                 if (cid === pwaDeviceId()) return;   // dat is dit toestel zelf
                 const c = clients[cid] || {};
                 const name = `<i class="fa-solid fa-${/^Phone/.test(c.label || "") ? "mobile-screen-button" : "desktop"}"></i> ${escapeHtmlSafe(c.name || c.label || cid)}`
-                    + ` <button type="button" class="device-act" data-act="rename" data-cid="${escapeHtmlSafe(cid)}" title="Rename"><i class="fa-solid fa-pen"></i></button>`
-                    + ` <button type="button" class="device-act" data-act="remove" data-cid="${escapeHtmlSafe(cid)}" title="Remove"><i class="fa-solid fa-xmark"></i></button>`;
+                    + (deviceVersionBehind(c.appVersion, latest)
+                        ? ` <button type="button" class="device-act" data-act="remove" data-cid="${escapeHtmlSafe(cid)}" title="Remove"><i class="fa-solid fa-xmark"></i></button>`
+                        : "");
                 rows.push(row(name, c.appVersion, c.lastSeen ? formatTimeAgo(c.lastSeen) : "—", latest));
             });
-            const own = clients[pwaDeviceId()];
-            if (own && own.name) rows[0] = rows[0].replace("This device", `This device · ${escapeHtmlSafe(own.name)}`);
-            if (own) rows[0] = rows[0].replace("This device", `This device <button type="button" class="device-act" data-act="rename" data-cid="${escapeHtmlSafe(pwaDeviceId())}" title="Rename"><i class="fa-solid fa-pen"></i></button>`);
+            if (!DB.isExtension && pwaDeviceName()) rows[0] = rows[0].replace("This device", `This device · ${escapeHtmlSafe(pwaDeviceName())}`);
 
             const anyOutdated = devices.some(d => deviceVersionBehind(d?.appVersion, latest));
             if (anyOutdated) {
@@ -201,24 +200,14 @@ function renderSyncDevices() {
     });
 }
 
-// Rename or remove a paired phone/browser in meta.clients (read-modify-write).
+// Remove an outdated paired phone/browser in meta.clients (read-modify-write).
 function wireDeviceActions(slot, cfg, clients) {
     slot.querySelectorAll(".device-act").forEach((b) => b.addEventListener("click", () => {
         const cid = b.dataset.cid;
         const c = clients[cid] || {};
-        let name = null;
-        if (b.dataset.act === "rename") {
-            name = prompt("Device name", c.name || c.label || "");
-            if (name === null) return;
-            name = name.trim().slice(0, 40);
-        } else if (!confirm(`Remove ${c.name || c.label || cid}?`)) {
-            return;
-        }
+        if (b.dataset.act !== "remove" || !confirm(`Remove ${c.name || c.label || cid}?`)) return;
         cs2UpdateEnc(cfg, "meta", (m) => {
-            if (!m.clients || !m.clients[cid]) return m;
-            if (b.dataset.act === "remove") delete m.clients[cid];
-            else if (name) m.clients[cid].name = name;
-            else delete m.clients[cid].name;
+            if (m.clients) delete m.clients[cid];
             return m;
         }).then(() => renderSyncDevices())
           .catch(() => showToast(`<i class="fa-solid fa-circle-exclamation"></i> Could not save.`));
@@ -6618,6 +6607,11 @@ function pwaDeviceId() {
     } catch (e) { return "dev-unknown"; }
 }
 
+// Name is set only on the device itself (Settings → Sync → Device name).
+function pwaDeviceName() {
+    try { return (localStorage.getItem("lt_pwa_device_name") || "").trim().slice(0, 40); } catch (e) { return ""; }
+}
+
 function pwaDeviceLabel() {
     const ua = navigator.userAgent || "";
     if (/Android/i.test(ua))          return "Phone (Android)";
@@ -6637,7 +6631,10 @@ function publishPwaPresence(force = false) {
     cs2UpdateEnc(cfg, "meta", (m) => {
         if (!m.clients) m.clients = {};
         // Keep a name given in Settings → Sync.
-        m.clients[pwaDeviceId()] = { ...(m.clients[pwaDeviceId()] || {}), label: pwaDeviceLabel(), appVersion: APP_VERSION, lastSeen: now };
+        const own = { label: pwaDeviceLabel(), appVersion: APP_VERSION, lastSeen: now };
+        const ownName = pwaDeviceName();
+        if (ownName) own.name = ownName;
+        m.clients[pwaDeviceId()] = own;
         // Apparaten die een week niet gezien zijn opruimen, anders groeit meta ongemerkt.
         Object.keys(m.clients).forEach((id) => {
             if (now - (m.clients[id].lastSeen || 0) > 7 * 24 * 60 * 60 * 1000) delete m.clients[id];
@@ -7182,6 +7179,31 @@ function applyMobileSyncUI() {
     document.getElementById("settings-scraper").hidden = true;
     const clientPanel = document.getElementById("settings-client-sync");
     clientPanel.hidden = false;
+    const nameInput = document.getElementById("client-device-name");
+    const nameSave = document.getElementById("btn-save-device-name");
+    if (nameInput && nameSave && !nameSave.dataset.bound) {
+        nameSave.dataset.bound = "1";
+        nameInput.value = pwaDeviceName();
+        nameInput.placeholder = pwaDeviceLabel();
+        // First run: fill in a default (phone model on Android, else the device type).
+        if (!pwaDeviceName()) {
+            const uad = navigator.userAgentData;
+            const modelP = (uad && uad.getHighEntropyValues) ? uad.getHighEntropyValues(["model"]).then(v => v.model || "").catch(() => "") : Promise.resolve("");
+            modelP.then((model) => {
+                if (pwaDeviceName()) return;
+                const def = (model ? `${model} (${pwaDeviceLabel().replace(/^Phone \(|\)$/g, "")})` : pwaDeviceLabel()).slice(0, 40);
+                try { localStorage.setItem("lt_pwa_device_name", def); } catch (e) {}
+                nameInput.value = def;
+                publishPwaPresence(true);
+            });
+        }
+        nameSave.addEventListener("click", () => {
+            try { localStorage.setItem("lt_pwa_device_name", nameInput.value.trim().slice(0, 40)); } catch (e) {}
+            publishPwaPresence(true);
+            setTimeout(renderSyncDevices, 1500);
+            showToast(`<i class="fa-solid fa-check"></i> Saved`);
+        });
+    }
     // Phone pairing from a paired PWA: same link as the extension's QR, built only when opened.
     const pairPhone = document.getElementById("client-pair-phone");
     if (pairPhone && !pairPhone.dataset.bound) {
