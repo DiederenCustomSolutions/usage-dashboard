@@ -4,6 +4,9 @@ Alle wijzigingen per versie. Meest recente versie bovenaan.
 
 ---
 
+## [0.43.6] — 2026-11-19
+- Settings → Sync in de PWA: "Add a phone" toont de koppel-QR, zodat een telefoon ook zonder extensie te koppelen is.
+
 ## [0.43.5] — 2026-11-19
 
 - App icon URLs changed so installed phone apps pick up the new icon.

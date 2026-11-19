@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.43.5";
+const APP_VERSION = "0.43.6";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -7148,6 +7148,22 @@ function applyMobileSyncUI() {
     document.getElementById("settings-scraper").hidden = true;
     const clientPanel = document.getElementById("settings-client-sync");
     clientPanel.hidden = false;
+    // Phone pairing from a paired PWA: same link as the extension's QR, built only when opened.
+    const pairPhone = document.getElementById("client-pair-phone");
+    if (pairPhone && !pairPhone.dataset.bound) {
+        pairPhone.dataset.bound = "1";
+        pairPhone.addEventListener("toggle", () => {
+            const qrEl = document.getElementById("client-pair-qr");
+            const cfg = isSyncClient();
+            if (!pairPhone.open || !qrEl || !cfg?.pairingKey || !cfg?.binId) {
+                if (qrEl) qrEl.innerHTML = "";
+                return;
+            }
+            const params = new URLSearchParams({ key: cfg.pairingKey, bin: cfg.binId });
+            if (cfg.provider && cfg.provider !== "npoint") params.set("provider", cfg.provider);
+            qrEl.innerHTML = pairingQrSvg(`${DEFAULT_PWA_HOST.replace(/\/+$/, "")}/index.html?${params}`);
+        });
+    }
     const devicesBox = document.getElementById("sync-devices-box");
     if (devicesBox && devicesBox.parentElement !== clientPanel) {
         clientPanel.appendChild(devicesBox);
