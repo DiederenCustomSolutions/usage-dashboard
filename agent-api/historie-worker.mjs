@@ -163,12 +163,20 @@ try {
         try {
             if (message.type === "bewaar") {
                 db.exec("BEGIN");
-                for (const row of message.rows) {
-                    insert.run(row.gelezen_op, row.account, row.dienst, row.laatst_gezien,
-                        row.vijf_uur_pct, row.vijf_uur_reset, row.week_pct, row.week_reset,
-                        row.bron, row.reset_tegoeden, row.reset_tegoeden_json, row.account, row.laatst_gezien);
+                try {
+                    for (const row of message.rows) {
+                        insert.run(row.gelezen_op, row.account, row.dienst, row.laatst_gezien,
+                            row.vijf_uur_pct, row.vijf_uur_reset, row.week_pct, row.week_reset,
+                            row.bron, row.reset_tegoeden, row.reset_tegoeden_json, row.account, row.laatst_gezien);
+                    }
+                    db.exec("COMMIT");
+                } catch (error) {
+                    db.exec("ROLLBACK");
+                    // SQLITE_BUSY: the next Firebase read can write once the other writer is done.
+                    if ((error.errcode & 0xff) !== 5) throw error;
+                    parentPort.postMessage({ waarschuwing: "usage-api: metingen niet opgeslagen (SQLite bezet)" });
+                    return;
                 }
-                db.exec("COMMIT");
                 dailyBackup();
             } else if (message.type === "inname") {
                 const { tabel, pc, positie = null, rijen, protocol } = message;

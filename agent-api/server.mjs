@@ -156,6 +156,7 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile, his
     const db = secrets.dbUrl.replace(/\/$/, "");
     const url = sub => `${db}/profiles/${secrets.binId}/${sub}.json`;
     let cache = null; // { profiles, readAt }
+    let cacheWriteFailed = false;
     let lastRefreshAsk = 0;
     const history = createHistory(historyFile, config, backupMap);
     if (cacheFile) { try { cache = JSON.parse(fs.readFileSync(cacheFile, "utf8")); } catch (e) { cache = null; } }
@@ -180,6 +181,22 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile, his
         return profiles;
     }
 
+    async function readAndStore(now) {
+        const profiles = await readProfiles();
+        cache = { profiles, readAt: now ?? Date.now() };
+        history.record(cache);
+        if (cacheFile) {
+            try {
+                fs.writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 });
+                cacheWriteFailed = false;
+            } catch (error) {
+                if (!cacheWriteFailed) console.error(`usage-api: cache schrijven mislukt (${error.code || "onbekend"})`);
+                cacheWriteFailed = true;
+            }
+        }
+        return profiles;
+    }
+
     // Same request the dashboard's refresh button makes: meta.refreshRequested(At).
     // Only when meta decrypts to a real object, so a wrong key can never wipe it.
     async function askRefresh(now, minS = config.ververs_vraag_min_s ?? 120) {
@@ -198,27 +215,23 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile, his
         } catch (e) { /* the next request asks again */ }
     }
 
-    const newestOf = profiles => Math.max(0, ...buildUsage(profiles || {}, config, { now: Date.now(), readOk: true, readAt: Date.now() })
-        .accounts.map(a => (a.laatst_gezien ? Date.parse(a.laatst_gezien) : 0)));
+    const measurementsOf = profiles => config.accounts.map(def =>
+        profiles[def.profiel]?.syncStatus?.[def.dienst]?.lastSynced || 0);
 
     // ?ververs=1 (een knop, zoals Ververs in de werklijst): nu meten en kort wachten op de nieuwe meting.
     // Alleen op die aanvraag; geen timer. Begrensd: hooguit ververs_wacht_s, lezen elke ververs_lees_ms.
     async function fresh(now) {
-        let before = 0;
+        let before;
         try {
-            cache = { profiles: await readProfiles(), readAt: Date.now() };
-            history.record(cache);
-            before = newestOf(cache.profiles);
+            before = measurementsOf(await readAndStore());
         } catch (e) { return false; }
         await askRefresh(now, config.ververs_knop_min_s ?? 10);
         const until = Date.now() + (config.ververs_wacht_s ?? 15) * 1000;
         while (Date.now() < until) {
             await new Promise(r => setTimeout(r, config.ververs_lees_ms ?? 1500));
             try {
-                const p = await readProfiles();
-                cache = { profiles: p, readAt: Date.now() };
-                history.record(cache);
-                if (newestOf(p) > before) { if (cacheFile) { try { fs.writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 }); } catch (e) {} } return true; }
+                const measurements = measurementsOf(await readAndStore());
+                if (measurements.some((timestamp, index) => timestamp > before[index])) return true;
             } catch (e) { /* volgende ronde */ }
         }
         return false;
@@ -229,9 +242,7 @@ export function createStore(config, secrets, { fetchImpl = fetch, cacheFile, his
         if (ververs) { ververst = await fresh(now); }
         else if (!cache || now - cache.readAt > (config.cache_s ?? 20) * 1000) {
             try {
-                cache = { profiles: await readProfiles(), readAt: now };
-                history.record(cache);
-                if (cacheFile) { try { fs.writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 }); } catch (e) {} }
+                await readAndStore(now);
             } catch (e) { readOk = false; }
         }
         const result = buildUsage(cache ? cache.profiles : {}, config, { now, readOk, readAt: cache ? cache.readAt : now });

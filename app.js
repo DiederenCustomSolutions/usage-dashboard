@@ -2,7 +2,7 @@
    USAGE DASHBOARD - CLIENT CONTROLLER & DATABASE LAYER
    ========================================================================== */
 
-const APP_VERSION = "0.43.2";
+const APP_VERSION = "0.43.4";
 
 // Firebase Realtime Database REST-endpoint (geen SDK nodig — werkt in MV3 en PWA).
 const FIREBASE_DB_URL = "https://usage-dashboard-98f1d-default-rtdb.europe-west1.firebasedatabase.app";
@@ -5479,7 +5479,7 @@ function usageModelLabel(model) {
 
 const usageSurfaceColours = new Map([["Claude Code", "opus"], ["Chats", "haiku"], ["Cowork", "sonnet"]]);
 
-function usageReportWeek(report, log) {
+function usageReportWeek(report, log, measuredAt) {
     const byDate = snapshot => {
         const days = Array.isArray(snapshot?.days) ? snapshot.days : [];
         return new Map(days.filter(day => day && /^\d{4}-\d{2}-\d{2}$/.test(day.date)).map(day => [day.date, day]));
@@ -5487,7 +5487,7 @@ function usageReportWeek(report, log) {
     const reportDays = byDate(report), logDays = byDate(log);
     // Anchor the seven UTC days to the newest saved snapshot, including when reopened offline.
     const snapshotEnd = (snapshot, days) => snapshot?.checkedAt || Date.parse([...days.keys()].sort().pop()) || 0;
-    const end = Math.max(snapshotEnd(report, reportDays), snapshotEnd(log, logDays));
+    const end = Math.max(snapshotEnd(report, reportDays), snapshotEnd(log, logDays), measuredAt || 0);
     if (!end || !Number.isFinite(end)) return [];
     const entries = day => Object.entries(day?.models || {}).filter(([, value]) => Number.isFinite(value) && value > 0);
     return Array.from({ length: 7 }, (_, index) => {
@@ -5505,6 +5505,31 @@ function usageReportWeek(report, log) {
         }
         return { date, models, fromLog, total: models.reduce((sum, [, value]) => sum + value, 0) };
     });
+}
+
+function usageModelGaps(chatgpt) {
+    const rises = chatgpt.modelUsageLimitRises;
+    if (!Array.isArray(rises) || !rises.length) return [];
+    const dayMs = 86400000, hourMs = 3600000;
+    const populated = buckets => Array.isArray(buckets) ? buckets.filter(bucket =>
+        Object.values(bucket?.models || {}).some(value => Number.isFinite(value) && value > 0)) : [];
+    const log = chatgpt.modelUsageLog;
+    const hours = populated(log?.hours).map(hour => Date.parse(hour.t)).filter(Number.isFinite);
+    const hourlyDays = new Set(hours.map(hour => Math.floor(hour / dayMs)));
+    // A positive daily report has no finer timing. For Codex, use the hours when present.
+    const days = [...populated(chatgpt.modelUsage?.days).map(day => Date.parse(day.date)),
+        ...populated(log?.days).map(day => Date.parse(day.date)).filter(day => !hourlyDays.has(day / dayMs))];
+    const overlaps = ({ from, to }, start, duration) => start <= to && from < start + duration;
+    return rises.filter(rise => Number.isFinite(rise?.from) && rise.from < rise.to && Number.isFinite(rise.to) &&
+        (rise.week > 0 || rise.fiveHour > 0) &&
+        !hours.some(hour => overlaps(rise, hour, hourMs)) && !days.some(day => overlaps(rise, day, dayMs)));
+}
+
+function usageGapLabel(gap) {
+    const parts = [];
+    if (gap.week) parts.push(`+${usageNumberFormat.format(gap.week)}% week`);
+    if (gap.fiveHour) parts.push(`+${usageNumberFormat.format(gap.fiveHour)}% 5h`);
+    return "Not in log: " + parts.join(", ");
 }
 
 function usageModelTotals(days, averageShares = false) {
@@ -5526,21 +5551,34 @@ function usageRowsFromProfiles() {
     const profiles = getAllProfilesForGrid().filter(p => !state.selectedProfileId || p.id === state.selectedProfileId);
     profiles.forEach(profile => {
         const sync = profile.syncStatus || {};
-        const gpt = sync.chatgpt?.modelUsage;
-        const log = sync.chatgpt?.modelUsageLog;
-        if ([gpt, log].some(s => Array.isArray(s?.days) && (s.days.length || s.checkedAt))) {
-            const week = usageReportWeek(gpt, log);
-            const last = week.filter(d => d.total > 0).pop();
+        const chatgpt = sync.chatgpt || {};
+        const gpt = chatgpt.modelUsage;
+        const log = chatgpt.modelUsageLog;
+        const usedWeek = 100 - (chatgpt.pctRemainingWeekly ?? 100);
+        const usedFiveHour = 100 - (chatgpt.pctRemaining5h ?? 100);
+        const limitNote = usedWeek > 0 ? `Week used: ${usageNumberFormat.format(usedWeek)}%`
+            : usedFiveHour > 0 ? `5h used: ${usageNumberFormat.format(usedFiveHour)}%` : "";
+        const gaps = usageModelGaps(chatgpt);
+        if (limitNote || gaps.length || [gpt, log].some(s => Array.isArray(s?.days) && (s.days.length || s.checkedAt))) {
+            const checkedAt = Math.max(gpt?.checkedAt || 0, log?.checkedAt || 0, chatgpt.lastSynced || 0);
+            const week = usageReportWeek(gpt, log, checkedAt);
+            for (const day of week) {
+                const start = Date.parse(day.date);
+                day.gaps = gaps.filter(gap => gap.to >= start && gap.from < start + 86400000);
+            }
+            const last = week.findLast(day => day.total > 0 || day.gaps.length);
+            const latestGap = week.findLast(day => day.gaps.length)?.gaps.at(-1);
             const hasLog = week.some(day => day.fromLog);
-            const checkedAt = Math.max(gpt?.checkedAt || 0, log?.checkedAt || 0);
             const totals = usageModelTotals(week, hasLog);
             const daily = usageModelState.period === "day";
+            const gap = daily ? last?.gaps.at(-1) : latestGap;
             rows.push({
                 key: tileKey(profile.id, "gpt"), provider: "gpt",
                 ...(usagePlannerAccounts.get(profile.label) || { who: profile.label }),
                 segments: daily ? usageModelTotals(last ? [last] : []) : totals,
                 period: daily ? (last ? usageDateFormat.format(Date.parse(last.date)) : "last day") : "7 days",
                 week, totals, hasLog, averaged: hasLog, hours: log?.hours, hoursAt: log?.checkedAt, units: gpt?.units || "",
+                gap, gaps, latestGap, limitNote,
                 // OpenAI's report can stop updating (16-11-2026: frozen for days); say so instead of looking idle.
                 stale: last && checkedAt - Date.parse(last.date) - 86400000 > 24 * 3600000
                     ? "No model data after " + usageDateFormat.format(Date.parse(last.date)) : ""
@@ -5575,19 +5613,23 @@ function usageValueList(entries, format) {
     return list;
 }
 
+function usageHourFormat(timeZone) {
+    return new Intl.DateTimeFormat("en-GB", {
+        timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23"
+    });
+}
+
 function usageHoursForDate(hours, date, timeZone) {
     const buckets = Array.from({ length: 24 }, () => new Map());
     if (!Array.isArray(hours) || !hours.length) return buckets;
-    const local = new Intl.DateTimeFormat("en-GB", {
-        timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23"
-    });
+    const format = usageHourFormat(timeZone);
     for (const hour of hours) {
         const instant = Date.parse(hour?.t);
         if (!Number.isFinite(instant)) continue;
-        const parts = Object.fromEntries(local.formatToParts(instant).map(p => [p.type, p.value]));
-        if (`${parts.year}-${parts.month}-${parts.day}` !== date) continue;
+        const local = usageLocalHour(instant, format);
+        if (local.date !== date) continue;
         // The repeated clock hour in autumn shares a bar. The skipped spring hour stays empty.
-        const models = buckets[Number(parts.hour)];
+        const models = buckets[local.hour];
         for (const [model, value] of Object.entries(hour.models || {})) {
             if (Number.isFinite(value) && value > 0) models.set(model, (models.get(model) || 0) + value);
         }
@@ -5610,31 +5652,42 @@ function appendUsageSegments(bar, models, peak, format, when = "") {
         bar.append(segment);
         values.push(label + " " + format(value));
     }
-    return values.join(", ") || "No usage";
+    return values.join(", ");
 }
 
 function usageTokens(value) {
     return usageTokenFormat.format(value).toUpperCase() + " tok";
 }
 
-function usageLocalHour(instant, timeZone) {
-    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
-        timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23"
-    }).formatToParts(instant).map(p => [p.type, p.value]));
+function usageLocalHour(instant, format) {
+    const parts = Object.fromEntries(format.formatToParts(instant).map(p => [p.type, p.value]));
     return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
 }
 
-function renderUsageHours(chart, hours, date, measuredAt) {
+function renderUsageHours(chart, hours, date, measuredAt, gaps, limitNote) {
     chart.replaceChildren();
     chart.hidden = !date;
     if (!date) return;
+    const format = usageHourFormat();
     const buckets = usageHoursForDate(hours, date);
     // Hours after the last measurement are unknown, not idle: mark the measured hour and fade the rest.
-    const measured = Number.isFinite(measuredAt) && Array.isArray(hours) ? usageLocalHour(measuredAt) : null;
+    const measured = Number.isFinite(measuredAt) && Array.isArray(hours) ? usageLocalHour(measuredAt, format) : null;
     const lastKnown = !measured || date < measured.date ? 24 : date > measured.date ? -1
         : Math.max(measured.hour, ...buckets.map((models, hour) => models.size ? hour : -1));
-    const peak = Math.max(...buckets.map(models => [...models.values()].reduce((a, b) => a + b, 0))) || (lastKnown < 24 ? 1 : 0);
-    if (!peak) {
+    const peak = Math.max(...buckets.map(models => [...models.values()].reduce((a, b) => a + b, 0)));
+    const hourGaps = new Map();
+    if (gaps.length) {
+        // Walk real UTC hours so a skipped or repeated local hour maps like the log bars.
+        const start = Date.parse(date) - 86400000;
+        const hourMs = 3600000;
+        for (let time = start; time < start + 72 * hourMs; time += hourMs) {
+            const gap = gaps.findLast(gap => gap.to >= time && gap.from < time + hourMs);
+            if (!gap) continue;
+            const local = usageLocalHour(time, format);
+            if (local.date === date) hourGaps.set(local.hour, gap);
+        }
+    }
+    if (!peak && lastKnown === 24 && !hourGaps.size) {
         chart.textContent = "No hourly data";
         return;
     }
@@ -5643,11 +5696,14 @@ function renderUsageHours(chart, hours, date, measuredAt) {
     buckets.forEach((models, hour) => {
         const column = document.createElement("div");
         const bar = document.createElement("div");
-        bar.className = "um-hour-bar";
+        const gap = models.size ? null : hourGaps.get(hour);
+        bar.className = gap ? "um-hour-bar um-gap" : "um-hour-bar";
         if (hour === lastKnown) column.className = "um-hour-now";
         else if (hour > lastKnown) column.className = "um-hour-later";
         const when = String(hour).padStart(2, "0") + ":00";
-        bar.title = when + " · " + (hour > lastKnown ? "Not measured yet" : appendUsageSegments(bar, models, peak, usageTokens, when));
+        const values = models.size ? appendUsageSegments(bar, models, peak, usageTokens, when) : limitNote ? "No model data" : "No usage";
+        bar.title = when + " · " + (gap ? usageGapLabel(gap) : hour > lastKnown ? "Not measured yet" : values);
+        if (gap) bar.setAttribute("data-tip", bar.title);
         bar.setAttribute("role", "img");
         bar.setAttribute("aria-label", bar.title);
         column.append(bar);
@@ -5683,23 +5739,32 @@ function renderUsageDetails(panel, item) {
     const shares = document.createElement("div");
     const showDate = date => {
         buttons.forEach((button, key) => button.setAttribute("aria-pressed", String(key === date)));
-        renderUsageHours(hourly, item.hours, date, item.hoursAt);
         // The share list follows the chosen day; without a day it shows the week.
         const day = item.week.find(d => d.date === date);
+        renderUsageHours(hourly, item.hours, date, item.hoursAt, item.gaps, item.limitNote);
         const entries = day ? usageModelTotals([day], true) : item.totals;
+        const gap = day ? day.gaps.at(-1) : item.latestGap;
         title.textContent = day ? usageDateFormat.format(Date.parse(day.date)) + " share" : item.averaged ? "Average daily share" : "7-day totals";
         const percent = value => usageNumberFormat.format(value) + "%";
-        shares.replaceChildren(entries.length ? usageValueList(entries, day || item.averaged ? percent : format) : "No usage");
+        shares.replaceChildren();
+        if (entries.length) shares.append(usageValueList(entries, day || item.averaged ? percent : format));
+        if (gap) {
+            shares.append(Object.assign(document.createElement("div"), { className: "um-gap-note", textContent: usageGapLabel(gap),
+                title: `${new Date(gap.from).toLocaleString()} – ${new Date(gap.to).toLocaleString()}` }));
+        } else if (!entries.length) shares.append(item.limitNote ? "No model data" : "No usage");
     };
     const peak = item.hasLog ? 0 : Math.max(0, ...item.week.map(day => day.total));
     item.week.forEach(day => {
         const column = document.createElement("div");
         const bar = document.createElement("button");
         bar.type = "button";
-        bar.className = "um-day-bar";
+        const gap = day.gaps.at(-1);
+        bar.className = gap ? "um-day-bar um-gap" : "um-day-bar";
         const date = usageDateFormat.format(Date.parse(day.date));
         const values = appendUsageSegments(bar, day.models, item.hasLog ? day.total : peak, day.fromLog ? usageTokens : format, date);
-        bar.title = date + (day.fromLog ? " · Codex log" : "") + " · " + values;
+        const labels = [date, day.fromLog && "Codex log", values, gap && usageGapLabel(gap)];
+        if (!values && !gap) labels.push(item.limitNote ? "No model data" : "No usage");
+        bar.title = labels.filter(Boolean).join(" · ");
         bar.setAttribute("aria-label", bar.title);
         bar.setAttribute("aria-controls", hourly.id);
         buttons.set(day.date, bar);
@@ -5784,7 +5849,8 @@ function renderUsageByModel() {
         if (item.account) name.appendChild(Object.assign(document.createElement("small"), { textContent: item.account }));
         row.querySelector(".um-tot").textContent = item.period;
         const stack = row.querySelector(".um-stack"), legend = row.querySelector(".um-legend");
-        if (!total) stack.appendChild(Object.assign(document.createElement("span"), { className: "um-note", textContent: "No usage" }));
+        if (!total) stack.appendChild(Object.assign(document.createElement("span"), { className: "um-note",
+            textContent: item.gap ? usageGapLabel(item.gap) : item.limitNote || "No usage" }));
         item.segments.forEach(({ label, colour, value }) => {
             const percent = value / total * 100;
             const segment = document.createElement("span");
@@ -5804,6 +5870,7 @@ function renderUsageByModel() {
             }
         });
         if (item.stale) legend.appendChild(Object.assign(document.createElement("span"), { className: "um-stale", textContent: item.stale }));
+        if (item.gap && total) legend.appendChild(Object.assign(document.createElement("span"), { className: "um-gap-note", textContent: usageGapLabel(item.gap) }));
         if (item.hasLog) legend.appendChild(Object.assign(document.createElement("span"), { textContent: "Codex log" }));
         (item.limits || []).forEach(limit => legend.appendChild(Object.assign(document.createElement("span"), {
             textContent: limit.name + " limit " + Math.round(limit.pctUsed) + "% used"

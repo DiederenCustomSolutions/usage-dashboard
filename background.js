@@ -450,6 +450,29 @@ async function fetchCodexModelUsage(checkedAt) {
     }
 }
 
+function chatgptLimitRises(previous, current, measuredAt) {
+    if (previous.account && current.account && previous.account !== current.account) return [];
+    const cutoff = measuredAt - 7 * 86400000;
+    const history = previous.modelUsageLimitRises;
+    const rises = Array.isArray(history) ? history.filter(rise => rise?.to >= cutoff) : [];
+    const from = previous.lastSynced;
+    if (!(from >= cutoff && from < measuredAt)) return rises;
+
+    const rise = { from, to: measuredAt };
+    for (const [name, pct, reset] of [
+        ["week", "pctRemainingWeekly", "resetWeeklyAbsoluteTs"],
+        ["fiveHour", "pctRemaining5h", "reset5hAbsoluteTs"]
+    ]) {
+        if (![previous[pct], current[pct]].every(value => Number.isFinite(value) && value >= 0 && value <= 100)) continue;
+        const oldReset = previous[reset], newReset = current[reset];
+        if ((oldReset && oldReset <= measuredAt) || (newReset && newReset <= measuredAt) ||
+            (oldReset && newReset && Math.abs(oldReset - newReset) > 1000)) continue;
+        if (current[pct] < previous[pct]) rise[name] = previous[pct] - current[pct];
+    }
+    if (rise.week || rise.fiveHour) rises.push(rise);
+    return rises.slice(-256);
+}
+
 // Handle data scraped from settings/analytics tabs
 async function handleTabSync(provider, data) {
     // Registreer succesvolle sync zodat de scrape-fout-timer weet dat er data ontvangen is.
@@ -484,6 +507,9 @@ async function handleTabSync(provider, data) {
                 lastSynced: receivedAt,
                 ...data
             };
+            if (provider === "chatgpt") {
+                user.syncStatus.chatgpt.modelUsageLimitRises = chatgptLimitRises(prevStatus, data, receivedAt);
+            }
             // De geïnjecteerde API-meting kent het accountlabel niet (die komt uit de DOM).
             // Zonder dit zou de kaart bij elke snelle refresh zijn naam kwijtraken.
             if (!user.syncStatus[provider].account && prevStatus.account) {
