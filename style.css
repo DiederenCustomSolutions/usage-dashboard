@@ -214,14 +214,14 @@ body.auth-view .app-container {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 34px;
-    flex: 0 0 34px;
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
 }
 
 .logo-badge-img {
-    width: 34px;
-    height: 34px;
+    width: 40px;
+    height: 40px;
     display: block;
     border-radius: 9px;
     object-fit: cover;
